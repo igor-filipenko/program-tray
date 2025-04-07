@@ -1,0 +1,10 @@
+[package]
+name = "program-tray"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gtk = { version = "0.18.2" }
+tray-icon = "0.20.0"
+muda = "0.16.1"
+image = "0.25.6"
