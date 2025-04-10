@@ -1,6 +1,8 @@
-use std::sync::Arc;
+use gtk::glib;
+use gtk::glib::Priority;
 use gtk::prelude::*;
 use muda::MenuItem;
+use std::sync::Arc;
 use tray_icon::{menu::{Menu, MenuEvent}, Icon, TrayIcon, TrayIconBuilder};
 
 const TITLE: &str = "No name";
@@ -28,7 +30,7 @@ impl Tray {
 
         // Build the tray icon
         let tray_menu = Menu::new();
-        let item_run = MenuItem::new("Connect", true, None);
+        let item_run = MenuItem::new("Activate", true, None);
         tray_menu.append(&item_run).unwrap();
         let item_quit = MenuItem::new("Quit", true, None);
         tray_menu.append(&item_quit).unwrap();
@@ -48,26 +50,42 @@ impl Tray {
         }
     }
 
-    pub fn activate(& self) {
-        let menu_run_id = self.item_run.id().as_ref().parse::<u8>().unwrap();
-        let menu_quit_id = self.item_quit.id().as_ref().parse::<u8>().unwrap();
+    pub fn start(& self) {
+        // Set up event handler for menu items
+        let rx = MenuEvent::receiver();
 
-        MenuEvent::set_event_handler(Some(move | event| {
-            if let MenuEvent { id, .. } = event {
-                let selected_id = id.as_ref().parse::<u8>().unwrap();
-                match selected_id {
-                    id if id == menu_run_id => {
-                        println!("selected to run {selected_id}");
-                        self.icon.set_icon(Some(load_embedded_icon(ICON_ON))).unwrap();
-                    }
-                    id if id == menu_quit_id => {
-                        println!("selected to quit {selected_id}");
-                        gtk::main_quit()
-                    }
-                    _ => eprintln!("Unrecognized menu event")
-                }
+        // Channel to communicate between threads
+        let (tx, rx_gtk) = glib::MainContext::channel(Priority::DEFAULT);
+
+        std::thread::spawn(move || {
+            while let Ok(event) = rx.recv() {
+                // Forward events to GTK main thread
+                let _ = tx.send(event);
             }
-        }));
+        });
+
+        // Process menu events in GTK main thread
+        let cloned_item_run = Arc::clone(&self.item_run);
+        let cloned_item_quit = Arc::clone(&self.item_quit);
+        let cloned_icon = Arc::clone(&self.icon);
+        let cloned_window = Arc::clone(&self.window);
+
+        rx_gtk.attach(None, move |event| {
+            match event.id {
+                id if id == cloned_item_run.id() => {
+                    println!("Option 2 selected");
+                    cloned_item_run.set_enabled(false);
+                    cloned_icon.set_icon(Some(load_embedded_icon(ICON_ON))).unwrap();
+                    cloned_window.set_visible(true);
+                },
+                id if id == cloned_item_quit.id() => {
+                    println!("Quitting...");
+                    gtk::main_quit();
+                },
+                _ => {}
+            }
+            glib::ControlFlow::Continue
+        });
     }
 
 }

@@ -8,3 +8,4 @@ gtk = { version = "0.18.2" }
 tray-icon = "0.20.0"
 muda = "0.16.1"
 image = "0.25.6"
+properties-file-parser = "0.1.4"
