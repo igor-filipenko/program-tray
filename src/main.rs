@@ -7,7 +7,7 @@ fn main() {
     // Step 1: Retrieve command-line arguments
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
-        eprintln!("Usage: program-tray <config-file-path>");
+        eprintln!("Usage: program-tray <config-toml-file-path>");
         std::process::exit(1);
     }
 
@@ -20,7 +20,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    println!("Using program {}", program.to_string());
+    println!("Using program {program:?}");
 
     if gtk::init().is_err() {
         eprintln!("Failed to initialize GTK");
