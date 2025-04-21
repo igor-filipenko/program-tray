@@ -1,10 +1,11 @@
 mod tray;
 mod config;
+mod launcher;
 
 use gtk::prelude::*;
 
 fn main() {
-    // Step 1: Retrieve command-line arguments
+    // Retrieve command-line arguments
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
         eprintln!("Usage: program-tray <config-toml-file-path>");
@@ -27,7 +28,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let tray = tray::Tray::new();
+    let tray = tray::Tray::new(&program);
     tray.start();
 
     // Start the GTK main loop

@@ -15,7 +15,7 @@ pub struct Program {
 
 impl Program {
 
-    pub fn title(&self) -> &String { &self.title }
+    pub fn title(&self) -> &str { &self.title }
     pub fn args(&self) -> &HashMap<String, String> { &self.args }
     pub fn env(&self) -> &HashMap<String, String> { &self.env }
 

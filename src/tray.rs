@@ -1,6 +1,7 @@
-use gtk::glib;
-use gtk::glib::Priority;
+use crate::config::Program;
+use gtk::glib::{Priority, Propagation};
 use gtk::prelude::*;
+use gtk::{glib, Button, ButtonsType, DialogFlags, MessageType, TextView};
 use muda::MenuItem;
 use std::sync::Arc;
 use tray_icon::{menu::{Menu, MenuEvent}, Icon, TrayIcon, TrayIconBuilder};
@@ -11,6 +12,8 @@ const ICON_OFF: &[u8] = include_bytes!("../resources/off.png");
 
 pub struct Tray {
     window: Arc<gtk::Window>,
+    terminal: Arc<TextView>,
+    button: Arc<Button>,
     icon: Arc<TrayIcon>,
     item_run: Arc<MenuItem>,
     item_quit: Arc<MenuItem>,
@@ -18,15 +21,35 @@ pub struct Tray {
 
 impl Tray {
 
-    pub fn new() -> Self {
+    pub fn new(program: &Program) -> Self {
         // Create the main window (hidden by default)
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
-        window.set_title(TITLE);
+        window.set_title(program.title());
         window.set_default_size(400, 300);
 
-        // Add some content to the window
-        let label = gtk::Label::new(Some(TITLE));
-        window.add(&label);
+        // Create a vertical box to organize widgets
+        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 5);
+
+        // Create a terminal like widget
+        let text_view = TextView::new();
+        text_view.set_editable(false);
+        text_view.set_cursor_visible(false);
+
+        // Add the terminal to a ScrolledWindow for scrolling
+        let scrolled_window = gtk::ScrolledWindow::builder()
+            .child(&text_view)
+            .visible(true)
+            .build();
+
+        // Create a Close Button
+        let close_button = Button::with_label("Close");
+
+        // Add widgets to the vertical box
+        vbox.pack_start(&scrolled_window, true, true, 0); // Expand Terminal
+        vbox.pack_start(&close_button, false, false, 0); // Place button at the bottom
+
+        // Add the vertical box to the main window
+        window.add(&vbox);
 
         // Build the tray icon
         let tray_menu = Menu::new();
@@ -44,13 +67,15 @@ impl Tray {
 
         Self {
             window: Arc::new(window),
+            terminal: Arc::new(text_view),
+            button: Arc::new(close_button),
             icon: Arc::new(tray_icon),
             item_run: Arc::new(item_run),
             item_quit: Arc::new(item_quit),
         }
     }
 
-    pub fn start(& self) {
+    pub fn start(&self) {
         // Set up event handler for menu items
         let rx = MenuEvent::receiver();
 
@@ -69,6 +94,7 @@ impl Tray {
         let cloned_item_quit = Arc::clone(&self.item_quit);
         let cloned_icon = Arc::clone(&self.icon);
         let cloned_window = Arc::clone(&self.window);
+        let cloned_terminal = Arc::clone(&self.terminal);
 
         rx_gtk.attach(None, move |event| {
             match event.id {
@@ -76,7 +102,7 @@ impl Tray {
                     println!("Option 2 selected");
                     cloned_item_run.set_enabled(false);
                     cloned_icon.set_icon(Some(load_embedded_icon(ICON_ON))).unwrap();
-                    cloned_window.set_visible(true);
+                    cloned_window.show_all();
                 },
                 id if id == cloned_item_quit.id() => {
                     println!("Quitting...");
@@ -85,6 +111,42 @@ impl Tray {
                 _ => {}
             }
             glib::ControlFlow::Continue
+        });
+
+        self.start_window();
+        self.start_button();
+    }
+
+    fn start_window(&self) {
+        self.window.connect_delete_event(|window, _| {
+            // Create a confirmation dialog
+            let dialog = gtk::MessageDialog::new(
+                Some(window),
+                DialogFlags::MODAL,
+                MessageType::Question,
+                ButtonsType::YesNo,
+                "Are you sure you want to quit?",
+            );
+
+            // Run the dialog and check the response
+            let response = dialog.run();
+            dialog.close();
+
+            if response == gtk::ResponseType::Yes {
+                gtk::main_quit(); // Terminate the application
+                Propagation::Proceed // Allow the window to close
+            } else {
+                Propagation::Stop // Prevent the window from closing
+            }
+        });
+    }
+
+    fn start_button(&self) {
+        let cloned_window = Arc::clone(&self.window);
+        let cloned_item_run = Arc::clone(&self.item_run);
+        self.button.connect_clicked(move |_| {
+            cloned_window.hide();
+            cloned_item_run.set_enabled(true);
         });
     }
 
