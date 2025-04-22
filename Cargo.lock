@@ -1325,6 +1325,7 @@ dependencies = [
  "muda",
  "regex",
  "serde",
+ "shlex",
  "tempfile",
  "toml",
  "tray-icon",

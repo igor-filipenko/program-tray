@@ -1,10 +1,11 @@
+use crate::config::Program;
 use std::collections::HashMap;
 use std::io::{Read, Result};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use crate::config::Program;
+use shlex::split;
 
 struct Launcher {
     command: String,
@@ -52,7 +53,18 @@ impl Launcher {
     }
 
     pub fn start(&mut self) -> Result<()> {
-        let mut child = Command::new(self.command.clone())
+        // Parse the command string into program and arguments
+        let parts = split(&self.command).unwrap_or_else(|| vec![self.command.to_string()]);
+        if parts.is_empty() {
+            panic!("Empty command string");
+        }
+
+        // Extract the program name and arguments
+        let program = &parts[0];
+        let args = &parts[1..];
+        
+        let mut child = Command::new(program)
+            .args(args)
             .stdout(Stdio::piped()) // Capture stdout
             .stderr(Stdio::piped()) // Capture stderr
             .envs(self.env.iter())  // Add environment variables from the HashMap
@@ -80,18 +92,22 @@ impl Launcher {
 
         let handler = Arc::clone(&self.status_handler);
         thread::spawn(move || {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    println!("Program exited with status: {}", status);
-                    let mut handler = handler.lock().unwrap();
-                    (handler)(status);
-                }
-                Ok(None) => {
-                    println!("Program is still running...");
-                    thread::sleep(Duration::from_secs(1)); // Wait for 1 second before checking again
-                }
-                Err(e) => {
-                    eprintln!("Error occurred while waiting for the process: {}", e);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        println!("Program exited with status: {}", status);
+                        let mut handler = handler.lock().unwrap();
+                        (handler)(status);
+                        break;
+                    }
+                    Ok(None) => {
+                        println!("Program is still running...");
+                        thread::sleep(Duration::from_secs(1)); // Wait for 1 second before checking again
+                    }
+                    Err(e) => {
+                        eprintln!("Error occurred while waiting for the process: {}", e);
+                        break;
+                    }
                 }
             }
         });
@@ -110,22 +126,101 @@ impl Launcher {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::thread::sleep;
-    use std::time::Duration;
     use crate::launcher::Launcher;
+    use std::collections::HashMap;
+    use std::option::Option;
+    use std::process::ExitStatus;
+    use std::sync::{Arc, Mutex};
+    use std::thread::sleep;
+    use std::time::{Duration, Instant};
 
+    const TIMEOUT: Duration = Duration::from_secs(5);
+    
     #[test]
     fn execute_echo() {
-        let mut launcher = Launcher::test_new("echo".parse().unwrap(), HashMap::new());
-        launcher.set_output_handler(|str| {
-            println!("output: {}", str);
+        let status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
+        let output: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+        let mut launcher = Launcher::test_new("echo test".parse().unwrap(), HashMap::new());
+        
+        let output_clone = Arc::clone(&output);
+        launcher.set_output_handler(move |str| {
+            let mut locked = output_clone.lock().unwrap();
+            if !str.is_empty() {
+                *locked = Some(str.clone());
+            }
         });
-        launcher.set_status_handler(|status| {
-            println!("status: {}", status);
+        
+        let status_clone = Arc::clone(&status);
+        launcher.set_status_handler(move |status| {
+            let mut locked = status_clone.lock().unwrap();
+            *locked = Some(status);
         });
+        
         launcher.start().unwrap();
-        sleep(Duration::from_secs(1));
+
+        let status_clone = Arc::clone(&status);
+        await_condition(move || {
+            let locked = status_clone.lock().unwrap();
+            locked.is_some()
+        });
+        
+        let locked_status = status.lock().unwrap();
+        assert!(locked_status.is_some());
+        assert!(locked_status.unwrap().success());
+        let locked_output = output.lock().unwrap();
+        assert!(locked_output.is_some());
+        assert_eq!("test\n", locked_output.clone().unwrap().as_str());
+    }
+
+    #[test]
+    fn execute_env() {
+        let status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
+        let output: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        
+        let env = HashMap::from([("VAR1".to_string(), "VAL1".to_string())]);
+        let mut launcher = Launcher::test_new("env".parse().unwrap(), env);
+
+        let output_clone = Arc::clone(&output);
+        launcher.set_output_handler(move |str| {
+            let mut locked = output_clone.lock().unwrap();
+            if !str.is_empty() {
+                *locked = Some(str.clone());
+            }
+        });
+
+        let status_clone = Arc::clone(&status);
+        launcher.set_status_handler(move |status| {
+            let mut locked = status_clone.lock().unwrap();
+            *locked = Some(status);
+        });
+
+        launcher.start().unwrap();
+
+        let status_clone = Arc::clone(&status);
+        await_condition(move || {
+            let locked = status_clone.lock().unwrap();
+            locked.is_some()
+        });
+        
+        let locked_output = output.lock().unwrap();
+        assert!(locked_output.is_some());
+        assert!(locked_output.clone().unwrap().lines().any(|line| line.contains("VAR1=VAL1")));
+    }
+
+    fn await_condition<F>(predicate: F)
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        let start_time = Instant::now();
+        let mut ok = predicate();
+        while !ok && start_time.elapsed() < TIMEOUT {
+            sleep(Duration::from_millis(100));
+            ok = predicate();
+        }
+        if (!ok) {
+            panic!("Timed out waiting for condition");
+        }
     }
     
 }
