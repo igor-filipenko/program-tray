@@ -1,13 +1,14 @@
 use crate::config::Program;
+use shlex::split;
 use std::collections::HashMap;
 use std::io::{Read, Result};
+use std::ops::{Deref, DerefMut};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use shlex::split;
 
-struct Launcher {
+pub struct Launcher {
     command: String,
     env: HashMap<String, String>,
     child: Option<Child>,
@@ -62,7 +63,7 @@ impl Launcher {
         // Extract the program name and arguments
         let program = &parts[0];
         let args = &parts[1..];
-        
+
         let mut child = Command::new(program)
             .args(args)
             .stdout(Stdio::piped()) // Capture stdout
@@ -74,29 +75,28 @@ impl Launcher {
         let mut stdout = child.stdout.take().expect("Failed to get stdout");
         let mut stderr = child.stderr.take().expect("Failed to get stderr");
 
-        let handler = Arc::clone(&self.output_handler);
-        thread::spawn(move || {
-            let mut buffer = String::new();
-            stdout.read_to_string(&mut buffer).expect("Failed to read stdout");
-            let mut handler = handler.lock().unwrap();
-            (handler)(buffer);
-        });
-        
-        let handler = Arc::clone(&self.output_handler);
-        thread::spawn(move || {
-            let mut buffer = String::new();
-            stderr.read_to_string(&mut buffer).expect("Failed to read stderr");
-            let mut handler = handler.lock().unwrap();
-            (handler)(buffer);
-        });
-
-        let handler = Arc::clone(&self.status_handler);
+        let cloned_output_handler = Arc::clone(&self.output_handler);
+        let cloned_status_handler = Arc::clone(&self.status_handler);
         thread::spawn(move || {
             loop {
+                {
+                    let mut buffer = String::new();
+                    stdout.read_to_string(&mut buffer).expect("Failed to read stdout");
+                    let mut handler = cloned_output_handler.lock().unwrap();
+                    (handler)(buffer);
+                }
+
+                {
+                    let mut buffer = String::new();
+                    stderr.read_to_string(&mut buffer).expect("Failed to read stderr");
+                    let mut handler = cloned_output_handler.lock().unwrap();
+                    (handler)(buffer);
+                }
+
                 match child.try_wait() {
                     Ok(Some(status)) => {
                         println!("Program exited with status: {}", status);
-                        let mut handler = handler.lock().unwrap();
+                        let mut handler = cloned_status_handler.lock().unwrap();
                         (handler)(status);
                         break;
                     }
@@ -142,7 +142,7 @@ mod tests {
         let output: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         let mut launcher = Launcher::test_new("echo test".parse().unwrap(), HashMap::new());
-        
+
         let output_clone = Arc::clone(&output);
         launcher.set_output_handler(move |str| {
             let mut locked = output_clone.lock().unwrap();
@@ -164,7 +164,7 @@ mod tests {
             let locked = status_clone.lock().unwrap();
             locked.is_some()
         });
-        
+
         let locked_status = status.lock().unwrap();
         assert!(locked_status.is_some());
         assert!(locked_status.unwrap().success());
@@ -177,7 +177,7 @@ mod tests {
     fn execute_env() {
         let status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
         let output: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        
+
         let env = HashMap::from([("VAR1".to_string(), "VAL1".to_string())]);
         let mut launcher = Launcher::test_new("env".parse().unwrap(), env);
 
@@ -202,7 +202,7 @@ mod tests {
             let locked = status_clone.lock().unwrap();
             locked.is_some()
         });
-        
+
         let locked_output = output.lock().unwrap();
         assert!(locked_output.is_some());
         assert!(locked_output.clone().unwrap().lines().any(|line| line.contains("VAR1=VAL1")));
