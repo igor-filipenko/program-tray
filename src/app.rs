@@ -12,13 +12,14 @@ const TITLE: &str = "No name";
 const ICON_ON: &[u8] = include_bytes!("../resources/on.png");
 const ICON_OFF: &[u8] = include_bytes!("../resources/off.png");
 
-pub struct Tray {
+pub struct App {
     launcher: Arc<Mutex<Launcher>>,
     terminal: Arc<TextView>,
     window: Arc<gtk::Window>,
     button: Arc<Button>,
     icon: Arc<TrayIcon>,
     item_run: Arc<MenuItem>,
+    item_hide: Arc<MenuItem>,
     item_quit: Arc<MenuItem>,
 }
 
@@ -28,7 +29,7 @@ enum Message {
     Status(ExitStatus),
 }
 
-impl Tray {
+impl App {
 
     pub fn new(program: &Program, launcher: &Arc<Mutex<Launcher>>) -> Self {
         // Create the main window (hidden by default)
@@ -62,8 +63,10 @@ impl Tray {
 
         // Build the tray icon
         let tray_menu = Menu::new();
-        let item_run = MenuItem::new("Activate", true, None);
+        let item_run = MenuItem::new("Start", true, None);
         tray_menu.append(&item_run).unwrap();
+        let item_hide = MenuItem::new("Show", true, None);
+        tray_menu.append(&item_hide).unwrap();
         let item_quit = MenuItem::new("Quit", true, None);
         tray_menu.append(&item_quit).unwrap();
 
@@ -81,6 +84,7 @@ impl Tray {
             button: Arc::new(close_button),
             icon: Arc::new(tray_icon),
             item_run: Arc::new(item_run),
+            item_hide: Arc::new(item_hide),
             item_quit: Arc::new(item_quit),
         }
     }
@@ -114,6 +118,7 @@ impl Tray {
         let cloned_launcher = Arc::clone(&self.launcher);
         let cloned_buffer = self.terminal.buffer().unwrap().clone();
         let cloned_item_run = Arc::clone(&self.item_run);
+        let cloned_item_hide = Arc::clone(&self.item_hide);
         let cloned_item_quit = Arc::clone(&self.item_quit);
         let cloned_icon = Arc::clone(&self.icon);
         let cloned_window = Arc::clone(&self.window);
@@ -128,7 +133,15 @@ impl Tray {
 
                             cloned_item_run.set_enabled(false);
                             cloned_icon.set_icon(Some(load_embedded_icon(ICON_ON))).unwrap();
-                            cloned_window.show_all();
+                        },
+                        id if id == cloned_item_hide.id() => {
+                            if (cloned_window.is_visible()) {
+                                cloned_window.hide();
+                                cloned_item_hide.set_text("Show");
+                            } else {
+                                cloned_window.show_all();
+                                cloned_item_hide.set_text("Hide");
+                            }
                         },
                         id if id == cloned_item_quit.id() => {
                             gtk::main_quit();
@@ -144,6 +157,8 @@ impl Tray {
                     let mut end = cloned_buffer.end_iter();
                     let msg = format!("Program stopped with status {}", exit_status);
                     cloned_buffer.insert(&mut end, &msg);
+                    cloned_item_run.set_enabled(true);
+                    cloned_icon.set_icon(Some(load_embedded_icon(ICON_OFF))).unwrap();
                 }
             }
             glib::ControlFlow::Continue
@@ -179,10 +194,10 @@ impl Tray {
 
     fn start_button(&self) {
         let cloned_window = Arc::clone(&self.window);
-        let cloned_item_run = Arc::clone(&self.item_run);
+        let cloned_item_hide = Arc::clone(&self.item_hide);
         self.button.connect_clicked(move |_| {
             cloned_window.hide();
-            cloned_item_run.set_enabled(true);
+            cloned_item_hide.set_text("Show");
         });
     }
 

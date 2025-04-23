@@ -1,4 +1,4 @@
-mod tray;
+mod app;
 mod config;
 mod launcher;
 
@@ -32,8 +32,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    let tray = tray::Tray::new(&program, &launcher);
-    tray.start();
+    let app = app::App::new(&program, &launcher);
+    app.start();
 
     // Start the GTK main loop
     gtk::main();
