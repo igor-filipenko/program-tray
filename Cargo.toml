@@ -2,6 +2,10 @@
 name = "program-tray"
 version = "0.1.0"
 edition = "2021"
+description = "Wrap any program in tray for background work"
+homepage = "https://github.com/igor-filipenko/program-tray"
+repository = "https://github.com/igor-filipenko/program-tray"
+categories = ["gui"]
 
 [dependencies]
 gtk = { version = "0.18.2" }
