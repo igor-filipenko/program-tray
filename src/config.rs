@@ -9,6 +9,7 @@ use regex::Regex;
 pub struct Program {
     title: String,
     command: String,
+    input: Option<String>,
     args: HashMap<String, String>,
     env: HashMap<String, String>,
 }
@@ -31,6 +32,26 @@ impl Program {
             // Look up the argument in the map and return its value or leave it unchanged if not found
             self.args.get(&arg_name).cloned().unwrap_or_else(|| format!("${}", arg_name))
         }).to_string()
+    }
+
+    pub fn input(&self) -> Option<String> {
+        if self.input.is_none() {
+            return None;
+        }
+        
+        // Create a regex to match placeholders like $arg
+        let re = Regex::new(r"\$(\w+)").unwrap();
+
+        // Replace each match with the corresponding value from the map
+        let input = self.input.clone().unwrap();
+        let result = re.replace_all(&input, |caps: &regex::Captures| {
+            // Extract the argument name (e.g., "arg" from "$arg")
+            let arg_name = String::from_str(caps.get(1).unwrap().as_str()).unwrap();
+
+            // Look up the argument in the map and return its value or leave it unchanged if not found
+            self.args.get(&arg_name).cloned().unwrap_or_else(|| format!("${}", arg_name))
+        }).to_string();
+        Some(result)
     }
 
 }
@@ -75,7 +96,8 @@ mod tests {
         temp_file.as_file().write_all(br#"
           title = "title1"
           command = "command1 $arg1"
-
+          input = "arg2"
+          
           [args]
           arg1 = "arg2"
 
@@ -89,6 +111,8 @@ mod tests {
         };
         assert_eq!(program.title(), "title1");
         assert_eq!(program.command(), "command1 arg2");
+        assert!(program.input().is_some());
+        assert_eq!(program.input().unwrap(), "arg2");
         assert_eq!(program.args().get("arg1").unwrap(), "arg2");
         assert_eq!(program.env().get("ENVVAR").unwrap(), "env1");
         Ok(())

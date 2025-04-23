@@ -137,11 +137,11 @@ impl Tray {
                     }
                 },
                 Message::Output(str) => {
-                    let mut end = cloned_buffer.start_iter();
+                    let mut end = cloned_buffer.end_iter();
                     cloned_buffer.insert(&mut end, &str);
                 }
                 Message::Status(exit_status) => {
-                    let mut end = cloned_buffer.start_iter();
+                    let mut end = cloned_buffer.end_iter();
                     let msg = format!("Program stopped with status {}", exit_status);
                     cloned_buffer.insert(&mut end, &msg);
                 }
