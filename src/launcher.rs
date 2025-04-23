@@ -72,12 +72,15 @@ impl Launcher {
             .spawn()
             .expect("Failed to start the program");
 
+        println!("Started the program {:?}", child);
+        
         let mut stdout = child.stdout.take().expect("Failed to get stdout");
         let mut stderr = child.stderr.take().expect("Failed to get stderr");
 
         let cloned_output_handler = Arc::clone(&self.output_handler);
         let cloned_status_handler = Arc::clone(&self.status_handler);
         thread::spawn(move || {
+            println!("Started the program loop {:?}", child);
             loop {
                 {
                     let mut buffer = String::new();

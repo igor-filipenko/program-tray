@@ -1,9 +1,11 @@
+use std::process::ExitStatus;
 use crate::config::Program;
+use crate::launcher::Launcher;
 use gtk::glib::{Priority, Propagation};
 use gtk::prelude::*;
 use gtk::{glib, Button, ButtonsType, DialogFlags, MessageType, TextView};
 use muda::MenuItem;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tray_icon::{menu::{Menu, MenuEvent}, Icon, TrayIcon, TrayIconBuilder};
 
 const TITLE: &str = "No name";
@@ -11,17 +13,24 @@ const ICON_ON: &[u8] = include_bytes!("../resources/on.png");
 const ICON_OFF: &[u8] = include_bytes!("../resources/off.png");
 
 pub struct Tray {
-    window: Arc<gtk::Window>,
+    launcher: Arc<Mutex<Launcher>>,
     terminal: Arc<TextView>,
+    window: Arc<gtk::Window>,
     button: Arc<Button>,
     icon: Arc<TrayIcon>,
     item_run: Arc<MenuItem>,
     item_quit: Arc<MenuItem>,
 }
 
+enum Message {
+    Menu(MenuEvent),
+    Output(String),
+    Status(ExitStatus),
+}
+
 impl Tray {
 
-    pub fn new(program: &Program) -> Self {
+    pub fn new(program: &Program, launcher: &Arc<Mutex<Launcher>>) -> Self {
         // Create the main window (hidden by default)
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
         window.set_title(program.title());
@@ -66,8 +75,9 @@ impl Tray {
             .expect("Failed to create tray icon");
 
         Self {
-            window: Arc::new(window),
+            launcher: Arc::clone(launcher),
             terminal: Arc::new(text_view),
+            window: Arc::new(window),
             button: Arc::new(close_button),
             icon: Arc::new(tray_icon),
             item_run: Arc::new(item_run),
@@ -81,34 +91,60 @@ impl Tray {
 
         // Channel to communicate between threads
         let (tx, rx_gtk) = glib::MainContext::channel(Priority::DEFAULT);
-
+        
+        let cloned_tx = tx.clone();
         std::thread::spawn(move || {
             while let Ok(event) = rx.recv() {
                 // Forward events to GTK main thread
-                let _ = tx.send(event);
+                let _ = cloned_tx.send(Message::Menu(event));
             }
         });
 
+        let mut locked_launcher = self.launcher.lock().unwrap();
+        let cloned_tx = tx.clone();
+        locked_launcher.set_output_handler(move |str| {
+            let _ = cloned_tx.send(Message::Output(str));
+        });
+        let cloned_tx = tx.clone();
+        locked_launcher.set_status_handler(move |status| {
+            let _ = cloned_tx.send(Message::Status(status));
+        });
+        
         // Process menu events in GTK main thread
+        let cloned_launcher = Arc::clone(&self.launcher);
+        let cloned_buffer = self.terminal.buffer().unwrap().clone();
         let cloned_item_run = Arc::clone(&self.item_run);
         let cloned_item_quit = Arc::clone(&self.item_quit);
         let cloned_icon = Arc::clone(&self.icon);
         let cloned_window = Arc::clone(&self.window);
-        let cloned_terminal = Arc::clone(&self.terminal);
 
         rx_gtk.attach(None, move |event| {
-            match event.id {
-                id if id == cloned_item_run.id() => {
-                    println!("Option 2 selected");
-                    cloned_item_run.set_enabled(false);
-                    cloned_icon.set_icon(Some(load_embedded_icon(ICON_ON))).unwrap();
-                    cloned_window.show_all();
+            match event {
+                Message::Menu(event) => {
+                    match event.id {
+                        id if id == cloned_item_run.id() => {
+                            let mut locked_launcher = cloned_launcher.lock().unwrap();
+                            locked_launcher.start().unwrap();
+
+                            cloned_item_run.set_enabled(false);
+                            cloned_icon.set_icon(Some(load_embedded_icon(ICON_ON))).unwrap();
+                            cloned_window.show_all();
+                        },
+                        id if id == cloned_item_quit.id() => {
+                            gtk::main_quit();
+                        },
+                        _ => {}
+                    }
                 },
-                id if id == cloned_item_quit.id() => {
-                    println!("Quitting...");
-                    gtk::main_quit();
-                },
-                _ => {}
+                Message::Output(str) => {
+                    let mut end = cloned_buffer.start_iter();
+                    cloned_buffer.insert(&mut end, &str);
+                }
+                Message::Status(exit_status) => {
+                    let mut end = cloned_buffer.start_iter();
+                    let msg = format!("Program stopped with status {}", exit_status);
+                    cloned_buffer.insert(&mut end, &msg);
+                }
             }
             glib::ControlFlow::Continue
         });

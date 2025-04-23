@@ -2,7 +2,9 @@ mod tray;
 mod config;
 mod launcher;
 
+use std::sync::{Arc, Mutex};
 use gtk::prelude::*;
+use crate::launcher::Launcher;
 
 fn main() {
     // Retrieve command-line arguments
@@ -23,12 +25,14 @@ fn main() {
     };
     println!("Using program {program:?}");
 
+    let launcher = Arc::new(Mutex::new(Launcher::new(&program)));
+    
     if gtk::init().is_err() {
         eprintln!("Failed to initialize GTK");
         std::process::exit(1);
     }
 
-    let tray = tray::Tray::new(&program);
+    let tray = tray::Tray::new(&program, &launcher);
     tray.start();
 
     // Start the GTK main loop
