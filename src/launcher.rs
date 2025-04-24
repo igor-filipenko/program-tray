@@ -13,8 +13,7 @@ pub struct Launcher {
     command: String,
     input: Option<String>,
     env: HashMap<String, String>,
-    child: Option<Child>,
-    running_flag: Arc<Mutex<bool>>,
+    child: Arc<Mutex<Option<Child>>>,
     output_handler: Arc<Mutex<dyn FnMut(String) + Send>>,
     status_handler: Arc<Mutex<dyn FnMut(ExitStatus) + Send>>,
 }
@@ -26,8 +25,7 @@ impl Launcher {
             command: program.command().clone(),
             input: program.input().clone(),
             env: program.env().clone(),
-            child: None,
-            running_flag: Arc::new(Mutex::new(false)),
+            child: Arc::new(Mutex::new(None)),
             output_handler: Arc::new(Mutex::new(|_| {})), // default empty handler
             status_handler: Arc::new(Mutex::new(|_| {})), // default empty handler
         }
@@ -39,8 +37,7 @@ impl Launcher {
             command: command.clone(),
             input: None,
             env: env.clone(),
-            child: None,
-            running_flag: Arc::new(Mutex::new(false)),
+            child: Arc::new(Mutex::new(None)),
             output_handler: Arc::new(Mutex::new(|_| {})), // default empty handler
             status_handler: Arc::new(Mutex::new(|_| {})), // default empty handler
         }
@@ -71,18 +68,15 @@ impl Launcher {
         let program = &parts[0];
         let args = &parts[1..];
 
-        self.child.replace(Command::new(program)
+        let mut child = Command::new(program)
             .args(args)
             .stdout(Stdio::piped()) // Capture stdout
             .stderr(Stdio::piped()) // Capture stderr
             .stdin(Stdio::piped())
             .envs(self.env.iter())  // Add environment variables from the HashMap
             .spawn()
-            .expect("Failed to start the program"));
-        let mut child = self.child.take().unwrap();
-        set_process_running(&self.running_flag, true);
-        println!("Started the program loop {:?}", child);
-        
+            .expect("Failed to start the program");
+
         if self.input.is_some() {
             if let Some(mut stdin) = child.stdin.take() {
                 let input = self.input.as_ref().unwrap();
@@ -92,41 +86,60 @@ impl Launcher {
 
         let mut stdout = child.stdout.take().expect("Failed to get stdout");
         setup_unblocking(&stdout);
-        let running_flag = Arc::clone(&self.running_flag);
-        let output_handler = Arc::clone(&self.output_handler);
-        thread::spawn(move || process_output("stdout", &mut stdout, running_flag, output_handler));
-
         let mut stderr = child.stderr.take().expect("Failed to get stderr");
         setup_unblocking(&stderr);
-        let running_flag = Arc::clone(&self.running_flag);
-        let output_handler = Arc::clone(&self.output_handler);
-        thread::spawn(move || process_output("stderr", &mut stderr, running_flag, output_handler));
 
-        let running_flag = Arc::clone(&self.running_flag);
+        println!("Starting the program loop {:?}", child);
+        keep_child(&self.child, child);
+
+        let output_handler = Arc::clone(&self.output_handler);
+        let child = Arc::clone(&self.child);
+        thread::spawn(move || process_output("stdout", &mut stdout, &child, output_handler));
+
+        let output_handler = Arc::clone(&self.output_handler);
+        let child = Arc::clone(&self.child);
+        thread::spawn(move || process_output("stderr", &mut stderr, &child, output_handler));
+
         let status_handler = Arc::clone(&self.status_handler);
-        thread::spawn(move || process_status(child, running_flag, status_handler));
+        let child = Arc::clone(&self.child);
+        thread::spawn(move || process_status(&child, status_handler));
 
         Ok(())
     }
 
     pub fn stop(&mut self) {
-        self.stop_async();
-        if let Some(child) = self.child.as_mut() {
-            match child.wait() {
-                Ok(status) => {
-                    println!("Program exited with status: {}", status);
+        let mut locked = self.child.lock().unwrap();
+        if let Some(child) = locked.as_mut() {
+            match child.kill() {
+                Ok(_) => {
+                    match child.wait() {
+                        Ok(_) => {
+                            println!("Stopped gracefully");
+                            forget_child(&self.child);
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to kill child process: {}", e);
+                        }
+                    }
                 }
                 Err(e) => {
-                    eprintln!("Error occurred while waiting for the process: {}", e);
+                    eprintln!("Error occurred while killing the program: {}", e);
                 }
             }
+        } else {
+            eprintln!("Program exited without a child process");
         }
+
     }
 
     pub fn stop_async(&mut self) {
-        if let Some(child) = self.child.as_mut() {
+        let mut locked = self.child.lock().unwrap();
+        if let Some(child) = locked.as_mut() {
             match child.kill() {
-                Ok(_) => {}
+                Ok(_) => {
+                    println!("Stopped gracefully");
+                    forget_child(&self.child);
+                }
                 Err(e) => {
                     eprintln!("Error occurred while killing the program: {}", e);
                 }
@@ -137,7 +150,7 @@ impl Launcher {
     }
     
     pub fn is_running(&self) -> bool {
-        *self.running_flag.lock().unwrap()
+        is_running(&self.child)
     }
     
 }
@@ -152,11 +165,10 @@ fn setup_unblocking(output: &dyn AsRawFd) {
 
 fn process_output(reader_name: &str,
                   reader: &mut dyn Read,
-                  running_flag: Arc<Mutex<bool>>,
+                  child: &Arc<Mutex<Option<Child>>>,
                   output_handler: Arc<Mutex<dyn FnMut(String) + Send>>) {
     let mut buf = [0; 1024];
     loop {
-        println!("Reading from {}...", reader_name);
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
@@ -171,41 +183,59 @@ fn process_output(reader_name: &str,
             Err(e) => {
                 eprintln!("Error occurred while reading {}: {}", reader_name, e);
             },
-        }        
-        if !*running_flag.lock().unwrap() {
+        }
+        if !is_running(&child) {
             println!("Stopping loop {}", reader_name);
             break;
         }
     }
 }
 
-fn process_status(mut child: Child,
-                  running_flag: Arc<Mutex<bool>>,
+fn process_status(mut child: &Arc<Mutex<Option<Child>>>,
                   status_handler: Arc<Mutex<dyn FnMut(ExitStatus) + Send>>) {
     loop {
         println!("Check process status...");
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                println!("Program exited with status: {}", status);
-                let mut handler = status_handler.lock().unwrap();
-                (handler)(status);
-                break;
+        let mut locked = child.lock().unwrap();
+        if let Some(mut child) = locked.as_mut() {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    println!("Program exited with status: {}", status);
+                    let mut handler = status_handler.lock().unwrap();
+                    (handler)(status);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("Error occurred while waiting for the process: {}", e);
+                    break;
+                }
+                Ok(None) => {
+                    println!("Program is still running...");
+                    thread::sleep(Duration::from_secs(1)); // Wait for 1 second before checking again
+                }
             }
-            Err(e) => {
-                eprintln!("Error occurred while waiting for the process: {}", e);
-                break;
-            }
-            Ok(None) => {
-                println!("Program is still running...");
-                thread::sleep(Duration::from_secs(1)); // Wait for 1 second before checking again
-            }
+        } else {
+            panic!("Thread without a child process");
         }
     }
-    set_process_running(&running_flag, false);
+    forget_child(child);
 }
 
-fn set_process_running(mut running_flag: &Arc<Mutex<bool>>, value: bool) {
-    *running_flag.lock().expect("Failed to lock process started") = value;
+fn keep_child(state: &Arc<Mutex<Option<Child>>>, new_child: Child) {
+    let mut locked = state.lock().unwrap(); // or handle the error properly
+    *locked = Some(new_child);
+}
+
+fn forget_child(state: &Arc<Mutex<Option<Child>>>) {
+    let mut locked = state.lock().unwrap();
+    *locked = None;
+}
+
+fn is_running(state: &Arc<Mutex<Option<Child>>>) -> bool {
+    let locked = state.lock().unwrap();
+    match locked.as_ref() {
+        None => false,
+        Some(_) => true,
+    }
 }
 
 #[cfg(test)]
@@ -269,7 +299,10 @@ mod tests {
         launcher.set_output_handler(move |str| {
             let mut locked = output_clone.lock().unwrap();
             if !str.is_empty() {
-                *locked = Some(str.clone());
+                match locked.as_mut() {  
+                    None => *locked = Some(str.clone()),
+                    Some(existing) => existing.push_str(&str),
+                }
             }
         });
 
