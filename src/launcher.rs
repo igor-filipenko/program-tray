@@ -167,18 +167,22 @@ fn process_output(reader_name: &str,
                   reader: &mut dyn Read,
                   child: &Arc<Mutex<Option<Child>>>,
                   output_handler: Arc<Mutex<dyn FnMut(String) + Send>>) {
-    let mut buf = [0; 1024];
+    let mut buf = [0u8; 1024];
     loop {
         match reader.read(&mut buf) {
-            Ok(0) => break,
+            Ok(0) => {
+                println!("Read {} bytes from {}", buf.len(), reader_name);
+            },
             Ok(n) => {
                 let str = String::from_utf8_lossy(&buf[..n]);
                 println!("{}: {}", reader_name, str);
                 let mut handler = output_handler.lock().unwrap();
                 (handler)(str.to_string());
+                continue;
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(100));
+                continue;
             }
             Err(e) => {
                 eprintln!("Error occurred while reading {}: {}", reader_name, e);
@@ -299,7 +303,7 @@ mod tests {
         launcher.set_output_handler(move |str| {
             let mut locked = output_clone.lock().unwrap();
             if !str.is_empty() {
-                match locked.as_mut() {  
+                match locked.as_mut() {
                     None => *locked = Some(str.clone()),
                     Some(existing) => existing.push_str(&str),
                 }
