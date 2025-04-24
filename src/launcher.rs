@@ -91,11 +91,13 @@ impl Launcher {
         }
 
         let mut stdout = child.stdout.take().expect("Failed to get stdout");
+        setup_unblocking(&stdout);
         let running_flag = Arc::clone(&self.running_flag);
         let output_handler = Arc::clone(&self.output_handler);
         thread::spawn(move || process_output("stdout", &mut stdout, running_flag, output_handler));
 
         let mut stderr = child.stderr.take().expect("Failed to get stderr");
+        setup_unblocking(&stderr);
         let running_flag = Arc::clone(&self.running_flag);
         let output_handler = Arc::clone(&self.output_handler);
         thread::spawn(move || process_output("stderr", &mut stderr, running_flag, output_handler));
@@ -140,21 +142,37 @@ impl Launcher {
     
 }
 
+fn setup_unblocking(output: &dyn AsRawFd) {
+    let fd = output.as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(output.as_raw_fd(), libc::F_GETFL, 0);
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+    }
+}
+
 fn process_output(reader_name: &str,
                   reader: &mut dyn Read,
                   running_flag: Arc<Mutex<bool>>,
                   output_handler: Arc<Mutex<dyn FnMut(String) + Send>>) {
-    let mut reader = BufReader::new(reader);
+    let mut buf = [0; 1024];
     loop {
         println!("Reading from {}...", reader_name);
-        let mut buffer = String::new();
-        reader.read_to_string(&mut buffer).expect("Failed to read!");
-        println!("{}: {}", reader_name, buffer);
-        if !buffer.is_empty() {
-            let mut handler = output_handler.lock().unwrap();
-            (handler)(buffer);
-            continue;
-        } else if !*running_flag.lock().unwrap() {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                let str = String::from_utf8_lossy(&buf[..n]);
+                println!("{}: {}", reader_name, str);
+                let mut handler = output_handler.lock().unwrap();
+                (handler)(str.to_string());
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                eprintln!("Error occurred while reading {}: {}", reader_name, e);
+            },
+        }        
+        if !*running_flag.lock().unwrap() {
             println!("Stopping loop {}", reader_name);
             break;
         }

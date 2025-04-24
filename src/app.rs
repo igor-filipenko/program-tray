@@ -129,10 +129,13 @@ impl App {
                     match event.id {
                         id if id == cloned_item_run.id() => {
                             let mut locked_launcher = cloned_launcher.lock().unwrap();
-                            locked_launcher.start().unwrap();
-
-                            cloned_item_run.set_enabled(false);
-                            cloned_icon.set_icon(Some(load_embedded_icon(ICON_ON))).unwrap();
+                            if locked_launcher.is_running() {
+                                locked_launcher.stop();
+                            } else {
+                                locked_launcher.start().unwrap();
+                                cloned_item_run.set_text("Stop");
+                                cloned_icon.set_icon(Some(load_embedded_icon(ICON_ON))).unwrap();
+                            }
                         },
                         id if id == cloned_item_hide.id() => {
                             if (cloned_window.is_visible()) {
@@ -157,7 +160,7 @@ impl App {
                     let mut end = cloned_buffer.end_iter();
                     let msg = format!("Program stopped with status {}", exit_status);
                     cloned_buffer.insert(&mut end, &msg);
-                    cloned_item_run.set_enabled(true);
+                    cloned_item_run.set_text("Start");
                     cloned_icon.set_icon(Some(load_embedded_icon(ICON_OFF))).unwrap();
                 }
             }
