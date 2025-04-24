@@ -1,11 +1,12 @@
 use crate::config::Program;
 use shlex::split;
 use std::collections::HashMap;
-use std::io::{Read, Result, Write};
+use std::io::{BufReader, Read, Result, Write};
 use std::ops::{Deref, DerefMut};
+use std::os::fd::AsRawFd;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::{io, thread};
 use std::time::Duration;
 
 pub struct Launcher {
@@ -13,6 +14,7 @@ pub struct Launcher {
     input: Option<String>,
     env: HashMap<String, String>,
     child: Option<Child>,
+    running_flag: Arc<Mutex<bool>>,
     output_handler: Arc<Mutex<dyn FnMut(String) + Send>>,
     status_handler: Arc<Mutex<dyn FnMut(ExitStatus) + Send>>,
 }
@@ -25,6 +27,7 @@ impl Launcher {
             input: program.input().clone(),
             env: program.env().clone(),
             child: None,
+            running_flag: Arc::new(Mutex::new(false)),
             output_handler: Arc::new(Mutex::new(|_| {})), // default empty handler
             status_handler: Arc::new(Mutex::new(|_| {})), // default empty handler
         }
@@ -37,6 +40,7 @@ impl Launcher {
             input: None,
             env: env.clone(),
             child: None,
+            running_flag: Arc::new(Mutex::new(false)),
             output_handler: Arc::new(Mutex::new(|_| {})), // default empty handler
             status_handler: Arc::new(Mutex::new(|_| {})), // default empty handler
         }
@@ -66,16 +70,19 @@ impl Launcher {
         // Extract the program name and arguments
         let program = &parts[0];
         let args = &parts[1..];
-        
-        let mut child = Command::new(program)
+
+        self.child.replace(Command::new(program)
             .args(args)
             .stdout(Stdio::piped()) // Capture stdout
             .stderr(Stdio::piped()) // Capture stderr
             .stdin(Stdio::piped())
             .envs(self.env.iter())  // Add environment variables from the HashMap
             .spawn()
-            .expect("Failed to start the program");
-
+            .expect("Failed to start the program"));
+        let mut child = self.child.take().unwrap();
+        set_process_running(&self.running_flag, true);
+        println!("Started the program loop {:?}", child);
+        
         if self.input.is_some() {
             if let Some(mut stdin) = child.stdin.take() {
                 let input = self.input.as_ref().unwrap();
@@ -83,50 +90,81 @@ impl Launcher {
             }
         }
 
+        let mut stdout = child.stdout.take().expect("Failed to get stdout");
+        let running_flag = Arc::clone(&self.running_flag);
         let output_handler = Arc::clone(&self.output_handler);
+        thread::spawn(move || process_output("stdout", &mut stdout, running_flag, output_handler));
+
+        let mut stderr = child.stderr.take().expect("Failed to get stderr");
+        let running_flag = Arc::clone(&self.running_flag);
+        let output_handler = Arc::clone(&self.output_handler);
+        thread::spawn(move || process_output("stderr", &mut stderr, running_flag, output_handler));
+
+        let running_flag = Arc::clone(&self.running_flag);
         let status_handler = Arc::clone(&self.status_handler);
-        thread::spawn(move || process_events(child, output_handler, status_handler));
+        thread::spawn(move || process_status(child, running_flag, status_handler));
 
         Ok(())
     }
-    
-    pub fn stop(&mut self) -> Result<()> {
+
+    pub fn stop(&mut self) {
+        self.stop_async();
         if let Some(child) = self.child.as_mut() {
-            child.kill()?;
-            self.child = None;
+            match child.wait() {
+                Ok(status) => {
+                    println!("Program exited with status: {}", status);
+                }
+                Err(e) => {
+                    eprintln!("Error occurred while waiting for the process: {}", e);
+                }
+            }
         }
-        Ok(())
+    }
+
+    pub fn stop_async(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            match child.kill() {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Error occurred while killing the program: {}", e);
+                }
+            }
+        } else { 
+            eprintln!("Program exited without a child process"); 
+        }
+    }
+    
+    pub fn is_running(&self) -> bool {
+        *self.running_flag.lock().unwrap()
+    }
+    
+}
+
+fn process_output(reader_name: &str,
+                  reader: &mut dyn Read,
+                  running_flag: Arc<Mutex<bool>>,
+                  output_handler: Arc<Mutex<dyn FnMut(String) + Send>>) {
+    let mut reader = BufReader::new(reader);
+    loop {
+        println!("Reading from {}...", reader_name);
+        let mut buffer = String::new();
+        reader.read_to_string(&mut buffer).expect("Failed to read!");
+        println!("{}: {}", reader_name, buffer);
+        if !buffer.is_empty() {
+            let mut handler = output_handler.lock().unwrap();
+            (handler)(buffer);
+            continue;
+        } else if !*running_flag.lock().unwrap() {
+            println!("Stopping loop {}", reader_name);
+            break;
+        }
     }
 }
 
-fn process_events(mut child: Child,
-                  output_handler: Arc<Mutex<dyn FnMut(String) + Send>>,
+fn process_status(mut child: Child,
+                  running_flag: Arc<Mutex<bool>>,
                   status_handler: Arc<Mutex<dyn FnMut(ExitStatus) + Send>>) {
-    println!("Started the program loop {:?}", child);
-    let mut stdout = child.stdout.take().expect("Failed to get stdout");
-    let mut stderr = child.stderr.take().expect("Failed to get stderr");
-    
     loop {
-        println!("Reading from stderr...");
-        let mut buffer = String::new();
-        stderr.read_to_string(&mut buffer).expect("Failed to read stderr");
-        println!("stderr: {}", buffer);
-        if !buffer.is_empty() {
-            let mut handler = output_handler.lock().unwrap();
-            (handler)(buffer);
-            continue;
-        }
-
-        println!("Read from stdout...");
-        let mut buffer = String::new();
-        stdout.read_to_string(&mut buffer).expect("Failed to read stdout");
-        println!("stdout: {}", buffer);
-        if !buffer.is_empty() {
-            let mut handler = output_handler.lock().unwrap();
-            (handler)(buffer);
-            continue;
-        } 
-        
         println!("Check process status...");
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -145,6 +183,11 @@ fn process_events(mut child: Child,
             }
         }
     }
+    set_process_running(&running_flag, false);
+}
+
+fn set_process_running(mut running_flag: &Arc<Mutex<bool>>, value: bool) {
+    *running_flag.lock().expect("Failed to lock process started") = value;
 }
 
 #[cfg(test)]

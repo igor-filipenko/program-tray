@@ -37,4 +37,10 @@ fn main() {
 
     // Start the GTK main loop
     gtk::main();
+    
+    let mut launcher = launcher.lock().unwrap();
+    if launcher.is_running() {
+        println!("Shutting down running program");
+        launcher.stop();
+    }
 }
