@@ -8,6 +8,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::{io, thread};
 use std::time::Duration;
+use toml::to_string;
 
 pub struct Launcher {
     command: String,
@@ -107,46 +108,13 @@ impl Launcher {
         Ok(())
     }
 
-    pub fn stop(&mut self) {
-        let mut locked = self.child.lock().unwrap();
-        if let Some(child) = locked.as_mut() {
-            match child.kill() {
-                Ok(_) => {
-                    match child.wait() {
-                        Ok(_) => {
-                            println!("Stopped gracefully");
-                            forget_child(&self.child);
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to kill child process: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error occurred while killing the program: {}", e);
-                }
-            }
-        } else {
-            eprintln!("Program exited without a child process");
-        }
-
+    pub fn stop(&mut self) -> Result<()> {
+        stop(&self.child, false)
     }
 
     pub fn stop_async(&mut self) {
-        let mut locked = self.child.lock().unwrap();
-        if let Some(child) = locked.as_mut() {
-            match child.kill() {
-                Ok(_) => {
-                    println!("Stopped gracefully");
-                    forget_child(&self.child);
-                }
-                Err(e) => {
-                    eprintln!("Error occurred while killing the program: {}", e);
-                }
-            }
-        } else { 
-            eprintln!("Program exited without a child process"); 
-        }
+        let child = Arc::clone(&self.child);
+        thread::spawn(move || stop(&child, true));
     }
     
     pub fn is_running(&self) -> bool {
@@ -217,8 +185,8 @@ fn process_status(mut child: &Arc<Mutex<Option<Child>>>,
                     thread::sleep(Duration::from_secs(1)); // Wait for 1 second before checking again
                 }
             }
-        } else {
-            panic!("Thread without a child process");
+        } else { 
+            eprintln!("Error while waiting for the process to exit");
         }
     }
     forget_child(child);
@@ -239,6 +207,44 @@ fn is_running(state: &Arc<Mutex<Option<Child>>>) -> bool {
     match locked.as_ref() {
         None => false,
         Some(_) => true,
+    }
+}
+
+pub fn stop(state: &Arc<Mutex<Option<Child>>>, is_async: bool) -> Result<()> {
+    let mut locked = state.lock().unwrap();
+    let child = locked.as_mut()
+        .ok_or(io::Error::new(io::ErrorKind::NotFound, "no child pid"))?;
+
+    let pid = child.id().to_string();
+    let status = Command::new("pkexec")
+        .arg("kill")
+        .arg("-INT")
+        .arg(pid)
+        .status()?;
+    match status.code() {
+        Some(0) => {
+            Ok(())
+        }
+        Some(code) => {
+            let msg = format!("Kill command failed with status {}", code);
+            Err(io::Error::new(io::ErrorKind::Other, msg))
+        }
+        _ => Err(io::Error::new(io::ErrorKind::Other, "Kill command failed")),
+    }?;
+
+    if is_async {
+        return Ok(())
+    }
+    
+    match child.wait() {
+        Ok(_) => {
+            println!("Stopped gracefully");
+            *locked = None;
+            Ok(())
+        }
+        Err(e) => {
+            Err(e)
+        }
     }
 }
 
