@@ -1,17 +1,17 @@
 use crate::config::Program;
 use shlex::split;
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Result, Write};
+use std::io::{Read, Result, Write};
 use std::ops::{Deref, DerefMut};
 use std::os::fd::AsRawFd;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
-use std::{io, thread};
 use std::time::Duration;
-use toml::to_string;
+use std::{io, thread};
 
 pub struct Launcher {
     command: String,
+    superuser: bool,
     input: Option<String>,
     env: HashMap<String, String>,
     child: Arc<Mutex<Option<Child>>>,
@@ -24,6 +24,7 @@ impl Launcher {
     pub fn new(program: &Program) -> Self {
         Launcher {
             command: program.command().clone(),
+            superuser: true,
             input: program.input().clone(),
             env: program.env().clone(),
             child: Arc::new(Mutex::new(None)),
@@ -36,6 +37,7 @@ impl Launcher {
     pub fn test_new(command: String, env: HashMap<String, String>) -> Self {
         Launcher {
             command: command.clone(),
+            superuser: false,
             input: None,
             env: env.clone(),
             child: Arc::new(Mutex::new(None)),
@@ -109,12 +111,13 @@ impl Launcher {
     }
 
     pub fn stop(&mut self) -> Result<()> {
-        stop(&self.child, false)
+        stop(&self.child, self.superuser, false)
     }
 
     pub fn stop_async(&mut self) {
         let child = Arc::clone(&self.child);
-        thread::spawn(move || stop(&child, true));
+        let is_superuser = self.superuser;
+        thread::spawn(move || stop(&child, is_superuser,true));
     }
     
     pub fn is_running(&self) -> bool {
@@ -167,26 +170,21 @@ fn process_status(mut child: &Arc<Mutex<Option<Child>>>,
                   status_handler: Arc<Mutex<dyn FnMut(ExitStatus) + Send>>) {
     loop {
         println!("Check process status...");
-        let mut locked = child.lock().unwrap();
-        if let Some(mut child) = locked.as_mut() {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    println!("Program exited with status: {}", status);
-                    let mut handler = status_handler.lock().unwrap();
-                    (handler)(status);
-                    break;
-                }
-                Err(e) => {
-                    eprintln!("Error occurred while waiting for the process: {}", e);
-                    break;
-                }
-                Ok(None) => {
-                    println!("Program is still running...");
-                    thread::sleep(Duration::from_secs(1)); // Wait for 1 second before checking again
-                }
+        match wait_child(child) {
+            Ok(Some(status)) => {
+                println!("Program exited with status: {}", status);
+                let mut handler = status_handler.lock().unwrap();
+                (handler)(status);
+                break;
             }
-        } else { 
-            eprintln!("Error while waiting for the process to exit");
+            Err(e) => {
+                eprintln!("Error occurred while waiting for the process: {}", e);
+                break;
+            }
+            Ok(None) => {
+                println!("Program is still running...");
+                thread::sleep(Duration::from_secs(1)); // Wait for 1 second before checking again
+            }
         }
     }
     forget_child(child);
@@ -202,6 +200,15 @@ fn forget_child(state: &Arc<Mutex<Option<Child>>>) {
     *locked = None;
 }
 
+fn wait_child(state: &Arc<Mutex<Option<Child>>>) -> Result<Option<ExitStatus>> {
+    let mut locked = state.lock().unwrap();
+    if let Some(mut child) = locked.as_mut() {
+        child.try_wait()
+    } else {
+        Err(io::Error::new(io::ErrorKind::NotFound, "No child is running"))
+    }
+}
+
 fn is_running(state: &Arc<Mutex<Option<Child>>>) -> bool {
     let locked = state.lock().unwrap();
     match locked.as_ref() {
@@ -210,17 +217,25 @@ fn is_running(state: &Arc<Mutex<Option<Child>>>) -> bool {
     }
 }
 
-pub fn stop(state: &Arc<Mutex<Option<Child>>>, is_async: bool) -> Result<()> {
+pub fn stop(state: &Arc<Mutex<Option<Child>>>, is_superuser: bool, is_async: bool) -> Result<()> {
     let mut locked = state.lock().unwrap();
     let child = locked.as_mut()
         .ok_or(io::Error::new(io::ErrorKind::NotFound, "no child pid"))?;
 
     let pid = child.id().to_string();
-    let status = Command::new("pkexec")
-        .arg("kill")
-        .arg("-INT")
-        .arg(pid)
-        .status()?;
+    let status = if is_superuser {
+        Command::new("pkexec")
+            .arg("kill")
+            .arg("-INT")
+            .arg(pid)
+            .status()?
+    } else {
+        Command::new("kill")
+            .arg("-INT")
+            .arg(pid)
+            .status()?
+    };
+    
     match status.code() {
         Some(0) => {
             Ok(())
@@ -252,11 +267,13 @@ pub fn stop(state: &Arc<Mutex<Option<Child>>>, is_async: bool) -> Result<()> {
 mod tests {
     use crate::launcher::Launcher;
     use std::collections::HashMap;
+    use std::io::Write;
     use std::option::Option;
     use std::process::ExitStatus;
     use std::sync::{Arc, Mutex};
     use std::thread::sleep;
     use std::time::{Duration, Instant};
+    use tempfile::NamedTempFile;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
     
@@ -333,6 +350,52 @@ mod tests {
         let locked_output = output.lock().unwrap();
         assert!(locked_output.is_some());
         assert!(locked_output.clone().unwrap().lines().any(|line| line.contains("VAR1=VAL1")));
+    }
+
+    #[test]
+    fn stop_process() {
+        let temp_file = NamedTempFile::new().unwrap();
+
+        temp_file.as_file().write_all(br#"
+          while true; do
+            sleep 1
+          done
+        "#).unwrap();
+        
+        let path = temp_file.path().to_str().unwrap();
+        let cmd = format!("sh {}", path);
+        let mut launcher = Launcher::test_new(cmd, HashMap::new());
+        
+        launcher.start().unwrap();
+        
+        assert!(launcher.is_running());
+        
+        launcher.stop().unwrap();
+
+        assert!(!launcher.is_running());
+    }
+
+    #[test]
+    fn stop_process_async() {
+        let temp_file = NamedTempFile::new().unwrap();
+
+        temp_file.as_file().write_all(br#"
+          while true; do
+            sleep 1
+          done
+        "#).unwrap();
+
+        let path = temp_file.path().to_str().unwrap();
+        let cmd = format!("sh {}", path);
+        let mut launcher = Launcher::test_new(cmd, HashMap::new());
+
+        launcher.start().unwrap();
+
+        assert!(launcher.is_running());
+
+        launcher.stop_async();
+
+        await_condition(move || !launcher.is_running());
     }
 
     fn await_condition<F>(predicate: F)
