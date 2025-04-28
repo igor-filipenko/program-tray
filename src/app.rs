@@ -12,6 +12,8 @@ const TITLE: &str = "No name";
 const ICON_ON: &[u8] = include_bytes!("../resources/on.png");
 const ICON_OFF: &[u8] = include_bytes!("../resources/off.png");
 
+/// The structure of UI interface
+/// 
 pub struct App {
     launcher: Arc<Mutex<Launcher>>,
     terminal: Arc<TextView>,

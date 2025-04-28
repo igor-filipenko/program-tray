@@ -5,6 +5,7 @@ edition = "2021"
 description = "Wrap any program in tray for background work"
 homepage = "https://github.com/igor-filipenko/program-tray"
 repository = "https://github.com/igor-filipenko/program-tray"
+license = "MIT OR Apache-2.0"
 categories = ["gui"]
 
 [dependencies]

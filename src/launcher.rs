@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{io, thread};
 
+/// Launch any CLI-program
+/// 
 pub struct Launcher {
     command: String,
     superuser: bool,

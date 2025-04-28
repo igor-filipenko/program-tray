@@ -1,3 +1,8 @@
+//! # program-tray
+//! 
+//! This UI application can wrap any CLI-program or service in a tray for background work.
+//! 
+
 mod app;
 mod config;
 mod launcher;

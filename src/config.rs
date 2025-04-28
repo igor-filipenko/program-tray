@@ -5,6 +5,8 @@ use std::str::FromStr;
 use toml;
 use regex::Regex;
 
+/// The structure of TOML-config file.
+/// 
 #[derive(Debug, Deserialize)]
 pub struct Program {
     title: String,
