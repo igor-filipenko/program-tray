@@ -1,13 +1,20 @@
 use crate::config::Program;
 use shlex::split;
 use std::collections::HashMap;
-use std::io::{Read, Result, Write};
+use std::io::{ErrorKind, Read, Result, Write};
 use std::ops::{Deref, DerefMut};
 use std::os::fd::AsRawFd;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::{io, thread};
+use std::{io, string, thread};
+use log::{info, trace, debug, warn, error};
+
+/// Authorise as superuser using UI
+const SUDO_COMMAND: &str = "pkexec";
+
+const READER_STDOUT: &str = "stdout";
+const READER_STDERR: &str = "stderr";
 
 /// Launch any CLI-program
 /// 
@@ -48,6 +55,8 @@ impl Launcher {
         }
     }
     
+    /// Setup program output handler 
+    /// 
     pub fn set_output_handler<F>(&mut self, handler: F)
     where
         F: FnMut(String) + Send + 'static,
@@ -55,6 +64,8 @@ impl Launcher {
         self.output_handler = Arc::new(Mutex::new(handler));
     }
 
+    /// Setup program stopped event handler
+    /// 
     pub fn set_status_handler<F>(&mut self, handler: F)
     where
         F: FnMut(ExitStatus) + Send + 'static,
@@ -62,25 +73,32 @@ impl Launcher {
         self.status_handler = Arc::new(Mutex::new(handler));
     }
 
+    /// Start program
+    /// 
     pub fn start(&mut self) -> Result<()> {
+        if is_running(&self.child) {
+            return Err(io::Error::new(ErrorKind::Other, "Already started"))
+        }
+        
         // Parse the command string into program and arguments
         let parts = split(&self.command).unwrap_or_else(|| vec![self.command.to_string()]);
         if parts.is_empty() {
-            panic!("Empty command string");
+            return Err(io::Error::new(ErrorKind::InvalidInput, "Empty command string"))
         }
 
         // Extract the program name and arguments
-        let program = &parts[0];
-        let args = &parts[1..];
-
+        let (program, args) = match self.superuser {
+            true => (&SUDO_COMMAND.to_string(), &parts[..]),
+            false => (&parts[0], &parts[1..]),
+        };
+        
         let mut child = Command::new(program)
             .args(args)
             .stdout(Stdio::piped()) // Capture stdout
             .stderr(Stdio::piped()) // Capture stderr
             .stdin(Stdio::piped())
             .envs(self.env.iter())  // Add environment variables from the HashMap
-            .spawn()
-            .expect("Failed to start the program");
+            .spawn()?;
 
         if self.input.is_some() {
             if let Some(mut stdin) = child.stdin.take() {
@@ -94,7 +112,7 @@ impl Launcher {
         let mut stderr = child.stderr.take().expect("Failed to get stderr");
         setup_unblocking(&stderr);
 
-        println!("Starting the program loop {:?}", child);
+        info!("Starting the program loop {:?}", child);
         keep_child(&self.child, child);
 
         let output_handler = Arc::clone(&self.output_handler);
@@ -112,16 +130,24 @@ impl Launcher {
         Ok(())
     }
 
+    /// Stop the running program.
+    /// Blocks the running thread till the program shutdown.
+    /// 
     pub fn stop(&mut self) -> Result<()> {
         stop(&self.child, self.superuser, false)
     }
 
+    /// Stop the running program.
+    /// No blocking.
+    /// 
     pub fn stop_async(&mut self) {
         let child = Arc::clone(&self.child);
         let is_superuser = self.superuser;
         thread::spawn(move || stop(&child, is_superuser,true));
     }
     
+    /// Check if the program still running.
+    /// 
     pub fn is_running(&self) -> bool {
         is_running(&self.child)
     }
@@ -144,25 +170,25 @@ fn process_output(reader_name: &str,
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
-                println!("Read {} bytes from {}", buf.len(), reader_name);
+                trace!("Read {} bytes from {}", buf.len(), reader_name);
             },
             Ok(n) => {
                 let str = String::from_utf8_lossy(&buf[..n]);
-                println!("{}: {}", reader_name, str);
+                trace!("{}: {}", reader_name, str);
                 let mut handler = output_handler.lock().unwrap();
                 (handler)(str.to_string());
                 continue;
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(100));
                 continue;
             }
             Err(e) => {
-                eprintln!("Error occurred while reading {}: {}", reader_name, e);
+                error!("Error occurred while reading {}: {}", reader_name, e);
             },
         }
         if !is_running(&child) {
-            println!("Stopping loop {}", reader_name);
+            debug!("Stopping loop {}", reader_name);
             break;
         }
     }
@@ -171,20 +197,20 @@ fn process_output(reader_name: &str,
 fn process_status(mut child: &Arc<Mutex<Option<Child>>>,
                   status_handler: Arc<Mutex<dyn FnMut(ExitStatus) + Send>>) {
     loop {
-        println!("Check process status...");
+        debug!("Check process status...");
         match wait_child(child) {
             Ok(Some(status)) => {
-                println!("Program exited with status: {}", status);
+                info!("Program exited with status: {}", status);
                 let mut handler = status_handler.lock().unwrap();
                 (handler)(status);
                 break;
             }
             Err(e) => {
-                eprintln!("Error occurred while waiting for the process: {}", e);
+                error!("Error occurred while waiting for the process: {}", e);
                 break;
             }
             Ok(None) => {
-                println!("Program is still running...");
+                trace!("Program is still running...");
                 thread::sleep(Duration::from_secs(1)); // Wait for 1 second before checking again
             }
         }
@@ -220,13 +246,18 @@ fn is_running(state: &Arc<Mutex<Option<Child>>>) -> bool {
 }
 
 pub fn stop(state: &Arc<Mutex<Option<Child>>>, is_superuser: bool, is_async: bool) -> Result<()> {
+    if !is_running(state) {
+        debug!("Already stopped");
+        return Ok(())
+    }
+    
     let mut locked = state.lock().unwrap();
     let child = locked.as_mut()
-        .ok_or(io::Error::new(io::ErrorKind::NotFound, "no child pid"))?;
+        .ok_or(io::Error::new(ErrorKind::NotFound, "no child pid"))?;
 
     let pid = child.id().to_string();
     let status = if is_superuser {
-        Command::new("pkexec")
+        Command::new(SUDO_COMMAND)
             .arg("kill")
             .arg("-INT")
             .arg(pid)
@@ -244,9 +275,9 @@ pub fn stop(state: &Arc<Mutex<Option<Child>>>, is_superuser: bool, is_async: boo
         }
         Some(code) => {
             let msg = format!("Kill command failed with status {}", code);
-            Err(io::Error::new(io::ErrorKind::Other, msg))
+            Err(io::Error::new(ErrorKind::Other, msg))
         }
-        _ => Err(io::Error::new(io::ErrorKind::Other, "Kill command failed")),
+        _ => Err(io::Error::new(ErrorKind::Other, "Kill command failed")),
     }?;
 
     if is_async {
@@ -255,7 +286,7 @@ pub fn stop(state: &Arc<Mutex<Option<Child>>>, is_superuser: bool, is_async: boo
     
     match child.wait() {
         Ok(_) => {
-            println!("Stopped gracefully");
+            debug!("Stopped gracefully");
             *locked = None;
             Ok(())
         }
@@ -275,12 +306,21 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::thread::sleep;
     use std::time::{Duration, Instant};
+    use env_logger::Env;
     use tempfile::NamedTempFile;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
+
+    fn setup() {
+        let _ = env_logger::Builder::from_env(Env::default().default_filter_or("trace"))
+            .is_test(true)
+            .try_init();
+    }
     
     #[test]
     fn execute_echo() {
+        setup();
+        
         let status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
         let output: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
@@ -303,9 +343,11 @@ mod tests {
         launcher.start().unwrap();
 
         let status_clone = Arc::clone(&status);
+        let output_clone = Arc::clone(&output);
         await_condition(move || {
-            let locked = status_clone.lock().unwrap();
-            locked.is_some()
+            let status_locked = status_clone.lock().unwrap();
+            let output_locked = output_clone.lock().unwrap();
+            status_locked.is_some() && output_locked.is_some()
         });
 
         let locked_status = status.lock().unwrap();
@@ -318,6 +360,8 @@ mod tests {
 
     #[test]
     fn execute_env() {
+        setup();
+        
         let status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
         let output: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
@@ -344,9 +388,11 @@ mod tests {
         launcher.start().unwrap();
 
         let status_clone = Arc::clone(&status);
+        let output_clone = Arc::clone(&output);
         await_condition(move || {
-            let locked = status_clone.lock().unwrap();
-            locked.is_some()
+            let status_locked = status_clone.lock().unwrap();
+            let output_locked = output_clone.lock().unwrap();
+            status_locked.is_some() && output_locked.is_some()
         });
 
         let locked_output = output.lock().unwrap();
@@ -356,6 +402,8 @@ mod tests {
 
     #[test]
     fn stop_process() {
+        setup();
+        
         let temp_file = NamedTempFile::new().unwrap();
 
         temp_file.as_file().write_all(br#"
@@ -379,6 +427,8 @@ mod tests {
 
     #[test]
     fn stop_process_async() {
+        setup();
+        
         let temp_file = NamedTempFile::new().unwrap();
 
         temp_file.as_file().write_all(br#"
@@ -398,6 +448,40 @@ mod tests {
         launcher.stop_async();
 
         await_condition(move || !launcher.is_running());
+    }
+
+    #[test]
+    fn try_start_process_if_started() {
+        setup();
+
+        let temp_file = NamedTempFile::new().unwrap();
+
+        temp_file.as_file().write_all(br#"
+          while true; do
+            sleep 1
+          done
+        "#).unwrap();
+
+        let path = temp_file.path().to_str().unwrap();
+        let cmd = format!("sh {}", path);
+        let mut launcher = Launcher::test_new(cmd, HashMap::new());
+
+        launcher.start().unwrap();
+        assert!(launcher.is_running());
+
+        let result = launcher.start();
+        assert!(result.is_err());
+        
+        launcher.stop().unwrap();
+    }
+
+    #[test]
+    fn blank_command() {
+        setup();
+
+        let mut launcher = Launcher::test_new(" ".to_string(), HashMap::new());
+        let result = launcher.start();
+        assert!(result.is_err());
     }
 
     fn await_condition<F>(predicate: F)
