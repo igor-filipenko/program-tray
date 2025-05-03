@@ -1,14 +1,13 @@
 use crate::config::Program;
+use log::{debug, error, info, trace};
 use shlex::split;
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Result, Write};
-use std::ops::{Deref, DerefMut};
 use std::os::fd::AsRawFd;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::{io, string, thread};
-use log::{info, trace, debug, warn, error};
+use std::{io, thread};
 
 /// Authorise as superuser using UI
 const SUDO_COMMAND: &str = "pkexec";
@@ -117,11 +116,11 @@ impl Launcher {
 
         let output_handler = Arc::clone(&self.output_handler);
         let child = Arc::clone(&self.child);
-        thread::spawn(move || process_output("stdout", &mut stdout, &child, output_handler));
+        thread::spawn(move || process_output(READER_STDOUT, &mut stdout, &child, output_handler));
 
         let output_handler = Arc::clone(&self.output_handler);
         let child = Arc::clone(&self.child);
-        thread::spawn(move || process_output("stderr", &mut stderr, &child, output_handler));
+        thread::spawn(move || process_output(READER_STDERR, &mut stderr, &child, output_handler));
 
         let status_handler = Arc::clone(&self.status_handler);
         let child = Arc::clone(&self.child);
@@ -194,7 +193,7 @@ fn process_output(reader_name: &str,
     }
 }
 
-fn process_status(mut child: &Arc<Mutex<Option<Child>>>,
+fn process_status(child: &Arc<Mutex<Option<Child>>>,
                   status_handler: Arc<Mutex<dyn FnMut(ExitStatus) + Send>>) {
     loop {
         debug!("Check process status...");
@@ -230,7 +229,7 @@ fn forget_child(state: &Arc<Mutex<Option<Child>>>) {
 
 fn wait_child(state: &Arc<Mutex<Option<Child>>>) -> Result<Option<ExitStatus>> {
     let mut locked = state.lock().unwrap();
-    if let Some(mut child) = locked.as_mut() {
+    if let Some(child) = locked.as_mut() {
         child.try_wait()
     } else {
         Err(io::Error::new(io::ErrorKind::NotFound, "No child is running"))
@@ -299,6 +298,7 @@ pub fn stop(state: &Arc<Mutex<Option<Child>>>, is_superuser: bool, is_async: boo
 #[cfg(test)]
 mod tests {
     use crate::launcher::Launcher;
+    use env_logger::Env;
     use std::collections::HashMap;
     use std::io::Write;
     use std::option::Option;
@@ -306,7 +306,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::thread::sleep;
     use std::time::{Duration, Instant};
-    use env_logger::Env;
     use tempfile::NamedTempFile;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
@@ -494,7 +493,7 @@ mod tests {
             sleep(Duration::from_millis(100));
             ok = predicate();
         }
-        if (!ok) {
+        if !ok {
             panic!("Timed out waiting for condition");
         }
     }
