@@ -31,10 +31,10 @@ impl Launcher {
     
     pub fn new(program: &Program) -> Self {
         Launcher {
-            command: program.command().clone(),
+            command: program.get_command().clone(),
             superuser: true,
-            input: program.input().clone(),
-            env: program.env().clone(),
+            input: program.get_input().clone(),
+            env: program.get_env().clone(),
             child: Arc::new(Mutex::new(None)),
             output_handler: Arc::new(Mutex::new(|_| {})), // default empty handler
             status_handler: Arc::new(Mutex::new(|_| {})), // default empty handler
@@ -42,7 +42,7 @@ impl Launcher {
     }
 
     #[cfg(test)]
-    pub fn test_new(command: String, env: HashMap<String, String>) -> Self {
+    fn test_new(command: String, env: HashMap<String, String>) -> Self {
         Launcher {
             command: command.clone(),
             superuser: false,

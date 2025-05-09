@@ -6,6 +6,7 @@
 mod app;
 mod config;
 mod launcher;
+mod icons;
 
 use std::sync::{Arc, Mutex};
 use gtk::prelude::*;

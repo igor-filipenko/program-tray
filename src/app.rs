@@ -36,7 +36,7 @@ impl App {
     pub fn new(program: &Program, launcher: &Arc<Mutex<Launcher>>) -> Self {
         // Create the main window (hidden by default)
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
-        window.set_title(program.title());
+        window.set_title(program.get_title());
         window.set_default_size(400, 300);
 
         // Create a vertical box to organize widgets
