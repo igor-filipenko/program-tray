@@ -3,16 +3,18 @@
 //! This UI application can wrap any CLI-program or service in a tray for background work.
 //! 
 
-mod app;
+mod ui;
 mod config;
 mod launcher;
-mod icons;
 
-use std::sync::{Arc, Mutex};
-use gtk::prelude::*;
 use crate::launcher::Launcher;
+use env_logger::Env;
+use gtk::prelude::*;
+use std::cell::RefCell;
+use std::io;
+use std::rc::Rc;
 
-fn main() {
+fn main() -> io::Result<()> {
     // Retrieve command-line arguments
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
@@ -20,33 +22,34 @@ fn main() {
         std::process::exit(1);
     }
 
+    env_logger::Builder::from_env(Env::default().default_filter_or("info"))
+        .try_init().expect("Failed to init logger");
+    
     let filepath = &args[1];
     println!("Loading config file: {}", filepath);
-    let program = match config::parse_properties_file(filepath) {
-        Ok(p) => p,
-        Err(msg) => {
-            eprintln!("Failed to read {} with error: {}", filepath, msg);
-            std::process::exit(1);
-        }
-    };
+    let program = config::parse_properties_file(filepath)?;
     println!("Using program {program:?}");
 
-    let launcher = Arc::new(Mutex::new(Launcher::new(&program)));
+    let icons = ui::icons::load_icons(&program)?;
+
+    let launcher = Rc::new(RefCell::new(Launcher::new(&program)));
     
     if gtk::init().is_err() {
         eprintln!("Failed to initialize GTK");
         std::process::exit(1);
     }
-
-    let app = app::App::new(&program, &launcher);
+    
+    let mut app = ui::app::App::new(&program, &icons, &launcher);
     app.start();
 
     // Start the GTK main loop
     gtk::main();
     
-    let mut launcher = launcher.lock().unwrap();
+    let mut launcher = launcher.borrow_mut();
     if launcher.is_running() {
         println!("Shutting down running program");
-        launcher.stop();
+        launcher.stop().expect("Program still running");
     }
+    
+    Ok(())
 }

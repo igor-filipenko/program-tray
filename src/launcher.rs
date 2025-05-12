@@ -16,7 +16,7 @@ const READER_STDOUT: &str = "stdout";
 const READER_STDERR: &str = "stderr";
 
 /// Launch any CLI-program
-/// 
+///
 pub struct Launcher {
     command: String,
     superuser: bool,

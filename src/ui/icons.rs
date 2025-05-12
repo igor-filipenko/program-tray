@@ -1,16 +1,17 @@
+use crate::config::Program;
 use image::EncodableLayout;
 use std::fs::File;
 use std::io;
 use std::io::Read;
 use tray_icon::Icon;
-use crate::config::Program;
 
-const ICON_ON: &[u8] = include_bytes!("../resources/on.png");
-const ICON_OFF: &[u8] = include_bytes!("../resources/off.png");
+const ICON_ON: &[u8] = include_bytes!("../../resources/on.png");
+const ICON_OFF: &[u8] = include_bytes!("../../resources/off.png");
 
+#[derive(Clone)]
 pub struct Icons {
-    on: Icon,
-    off: Icon,
+    pub on: Icon,
+    pub off: Icon,
 }
 
 pub fn load_icons(program: &Program) -> io::Result<Icons> {
@@ -46,9 +47,9 @@ fn load_binary(path: &str) -> io::Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
-    use super::*;
 
     #[test]
     fn load_defaults() -> io::Result<()> {

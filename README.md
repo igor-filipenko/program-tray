@@ -18,7 +18,7 @@ program-tray some-program.toml
 
 Example of TOML:
 ```toml
-title = "some program"
+id = "some-program"
 command = "some-program --user $user"
 input = "$password"
 
@@ -28,6 +28,13 @@ password = "password"
 
 [env]
 var1 = "val1"
+
+[ui]
+title = "some program"
+
+[ui.icons]
+on = "/some/path/to/file"
+off = "/some/path/to/file"
 ```
 
 ## How it can be use
