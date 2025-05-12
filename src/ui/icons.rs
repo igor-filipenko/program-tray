@@ -85,5 +85,4 @@ mod tests {
         let _ = load_icons0(Some(path), Some(path))?;
         Ok(())
     }
-
 }

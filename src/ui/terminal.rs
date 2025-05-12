@@ -1,5 +1,5 @@
 use crate::config::Program;
-use crate::ui::component::{MenuAction, Message, Component, TerminalAction};
+use crate::ui::component::{Component, MenuAction, Message, TerminalAction};
 use gtk::glib::{Propagation, Sender};
 use gtk::prelude::*;
 use gtk::{Button, ButtonsType, DialogFlags, MessageType, TextBuffer, TextView, Window};
@@ -14,7 +14,6 @@ pub struct Terminal {
 }
 
 impl Component for Terminal {
-
     fn start(&mut self, tx: &Sender<Message>) {
         self.connect_delete_event();
         self.connect_close_event(tx);
@@ -28,11 +27,9 @@ impl Component for Terminal {
             Message::Terminal(_) => {}
         }
     }
-
 }
 
 impl Terminal {
-
     pub fn new(program: &Program) -> Terminal {
         // Create the main window (hidden by default)
         let window = Window::new(gtk::WindowType::Toplevel);
@@ -65,7 +62,12 @@ impl Terminal {
 
         let buffer = text_view.buffer().expect("Failed to get buffer");
 
-        Self{window, button, buffer, is_program_running: false}
+        Self {
+            window,
+            button,
+            buffer,
+            is_program_running: false,
+        }
     }
 
     fn on_tray_menu_selected(&mut self, action: &MenuAction) {
@@ -75,14 +77,14 @@ impl Terminal {
                     self.clear();
                     self.is_program_running = true;
                 }
-            },
+            }
             MenuAction::VISIBILITY => {
                 if self.window.get_visible() {
                     self.window.hide();
                 } else {
                     self.window.show_all();
                 }
-            },
+            }
             _ => {}
         }
     }
@@ -134,5 +136,4 @@ impl Terminal {
             let _ = tx.send(Message::Terminal(TerminalAction::HIDE));
         });
     }
-
 }

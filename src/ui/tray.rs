@@ -1,10 +1,13 @@
 use crate::config::Program;
+use crate::ui::component::{Component, MenuAction, Message, TerminalAction};
 use crate::ui::icons::Icons;
-use crate::ui::component::{MenuAction, Message, Component, TerminalAction};
 use gtk::glib::Sender;
-use log::{warn};
-use muda::{MenuItem};
-use tray_icon::{menu::{Menu, MenuEvent}, Icon, TrayIcon, TrayIconBuilder};
+use log::warn;
+use muda::MenuItem;
+use tray_icon::{
+    menu::{Menu, MenuEvent},
+    Icon, TrayIcon, TrayIconBuilder,
+};
 
 #[derive(Clone)]
 pub struct Tray {
@@ -18,7 +21,6 @@ pub struct Tray {
 }
 
 impl Component for Tray {
-    
     fn start(&mut self, tx: &Sender<Message>) {
         let rx = MenuEvent::receiver();
         let tx = tx.clone();
@@ -43,14 +45,12 @@ impl Component for Tray {
             Message::TrayMenu(action) => self.on_action_selected(action),
             Message::Terminal(action) => self.on_terminal_action(action),
             Message::ProgramStopped(_) => self.on_program_stopped(),
-            Message::ProgramOutput(_) => {},
+            Message::ProgramOutput(_) => {}
         }
     }
-    
 }
 
 impl Tray {
-
     pub fn new(program: &Program, icons: &Icons) -> Self {
         let tray_menu = Menu::new();
         let item_run = MenuItem::new("Start", true, None);
@@ -68,7 +68,15 @@ impl Tray {
             .build()
             .expect("Failed to create tray icon");
 
-        Self { internal, icons, item_run, item_show, item_quit, is_running: false, is_shown: false }
+        Self {
+            internal,
+            icons,
+            item_run,
+            item_show,
+            item_quit,
+            is_running: false,
+            is_shown: false,
+        }
     }
 
     fn on_action_selected(&mut self, action: &MenuAction) {
@@ -79,7 +87,7 @@ impl Tray {
             MenuAction::UNKNOWN(menuId) => warn!("unknown menu action: {:?}", menuId),
         }
     }
-    
+
     fn on_terminal_action(&mut self, action: &TerminalAction) {
         self.switch_terminal_visibility(match action {
             TerminalAction::HIDE => false,
@@ -106,15 +114,15 @@ impl Tray {
         self.set_icon(&self.icons.off);
         self.is_running = false;
     }
-    
+
     fn set_icon(&self, icon: &Icon) {
         self.internal.set_icon(Some(icon.clone())).unwrap(); // TODO: unwrap
     }
-    
+
     fn toggle_terminal_visibility(&mut self) {
         self.switch_terminal_visibility(!self.is_running)
     }
-    
+
     fn switch_terminal_visibility(&mut self, visible: bool) {
         if visible {
             self.item_show.set_text("Hide");
@@ -123,5 +131,4 @@ impl Tray {
         }
         self.is_shown = visible;
     }
-    
 }

@@ -28,7 +28,6 @@ pub struct Launcher {
 }
 
 impl Launcher {
-    
     pub fn new(program: &Program) -> Self {
         Launcher {
             command: program.get_command().clone(),
@@ -53,9 +52,9 @@ impl Launcher {
             status_handler: Arc::new(Mutex::new(|_| {})), // default empty handler
         }
     }
-    
-    /// Setup program output handler 
-    /// 
+
+    /// Setup program output handler
+    ///
     pub fn set_output_handler<F>(&mut self, handler: F)
     where
         F: FnMut(String) + Send + 'static,
@@ -64,7 +63,7 @@ impl Launcher {
     }
 
     /// Setup program stopped event handler
-    /// 
+    ///
     pub fn set_status_handler<F>(&mut self, handler: F)
     where
         F: FnMut(ExitStatus) + Send + 'static,
@@ -73,16 +72,19 @@ impl Launcher {
     }
 
     /// Start program
-    /// 
+    ///
     pub fn start(&mut self) -> Result<()> {
         if is_running(&self.child) {
-            return Err(io::Error::new(ErrorKind::Other, "Already started"))
+            return Err(io::Error::new(ErrorKind::Other, "Already started"));
         }
-        
+
         // Parse the command string into program and arguments
         let parts = split(&self.command).unwrap_or_else(|| vec![self.command.to_string()]);
         if parts.is_empty() {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "Empty command string"))
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Empty command string",
+            ));
         }
 
         // Extract the program name and arguments
@@ -90,19 +92,21 @@ impl Launcher {
             true => (&SUDO_COMMAND.to_string(), &parts[..]),
             false => (&parts[0], &parts[1..]),
         };
-        
+
         let mut child = Command::new(program)
             .args(args)
             .stdout(Stdio::piped()) // Capture stdout
             .stderr(Stdio::piped()) // Capture stderr
             .stdin(Stdio::piped())
-            .envs(self.env.iter())  // Add environment variables from the HashMap
+            .envs(self.env.iter()) // Add environment variables from the HashMap
             .spawn()?;
 
         if self.input.is_some() {
             if let Some(mut stdin) = child.stdin.take() {
                 let input = self.input.as_ref().unwrap();
-                stdin.write_all(input.as_bytes()).expect("Failed to write to stdin");
+                stdin
+                    .write_all(input.as_bytes())
+                    .expect("Failed to write to stdin");
             }
         }
 
@@ -131,26 +135,25 @@ impl Launcher {
 
     /// Stop the running program.
     /// Blocks the running thread till the program shutdown.
-    /// 
+    ///
     pub fn stop(&mut self) -> Result<()> {
         stop(&self.child, self.superuser, false)
     }
 
     /// Stop the running program.
     /// No blocking.
-    /// 
+    ///
     pub fn stop_async(&mut self) {
         let child = Arc::clone(&self.child);
         let is_superuser = self.superuser;
-        thread::spawn(move || stop(&child, is_superuser,true));
+        thread::spawn(move || stop(&child, is_superuser, true));
     }
-    
+
     /// Check if the program still running.
-    /// 
+    ///
     pub fn is_running(&self) -> bool {
         is_running(&self.child)
     }
-    
 }
 
 fn setup_unblocking(output: &dyn AsRawFd) {
@@ -161,16 +164,18 @@ fn setup_unblocking(output: &dyn AsRawFd) {
     }
 }
 
-fn process_output(reader_name: &str,
-                  reader: &mut dyn Read,
-                  child: &Arc<Mutex<Option<Child>>>,
-                  output_handler: Arc<Mutex<dyn FnMut(String) + Send>>) {
+fn process_output(
+    reader_name: &str,
+    reader: &mut dyn Read,
+    child: &Arc<Mutex<Option<Child>>>,
+    output_handler: Arc<Mutex<dyn FnMut(String) + Send>>,
+) {
     let mut buf = [0u8; 1024];
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
                 trace!("Read {} bytes from {}", buf.len(), reader_name);
-            },
+            }
             Ok(n) => {
                 let str = String::from_utf8_lossy(&buf[..n]);
                 trace!("{}: {}", reader_name, str);
@@ -184,7 +189,7 @@ fn process_output(reader_name: &str,
             }
             Err(e) => {
                 error!("Error occurred while reading {}: {}", reader_name, e);
-            },
+            }
         }
         if !is_running(&child) {
             debug!("Stopping loop {}", reader_name);
@@ -193,8 +198,10 @@ fn process_output(reader_name: &str,
     }
 }
 
-fn process_status(child: &Arc<Mutex<Option<Child>>>,
-                  status_handler: Arc<Mutex<dyn FnMut(ExitStatus) + Send>>) {
+fn process_status(
+    child: &Arc<Mutex<Option<Child>>>,
+    status_handler: Arc<Mutex<dyn FnMut(ExitStatus) + Send>>,
+) {
     loop {
         debug!("Check process status...");
         match wait_child(child) {
@@ -232,7 +239,10 @@ fn wait_child(state: &Arc<Mutex<Option<Child>>>) -> Result<Option<ExitStatus>> {
     if let Some(child) = locked.as_mut() {
         child.try_wait()
     } else {
-        Err(io::Error::new(io::ErrorKind::NotFound, "No child is running"))
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "No child is running",
+        ))
     }
 }
 
@@ -247,11 +257,12 @@ fn is_running(state: &Arc<Mutex<Option<Child>>>) -> bool {
 pub fn stop(state: &Arc<Mutex<Option<Child>>>, is_superuser: bool, is_async: bool) -> Result<()> {
     if !is_running(state) {
         debug!("Already stopped");
-        return Ok(())
+        return Ok(());
     }
-    
+
     let mut locked = state.lock().unwrap();
-    let child = locked.as_mut()
+    let child = locked
+        .as_mut()
         .ok_or(io::Error::new(ErrorKind::NotFound, "no child pid"))?;
 
     let pid = child.id().to_string();
@@ -262,16 +273,11 @@ pub fn stop(state: &Arc<Mutex<Option<Child>>>, is_superuser: bool, is_async: boo
             .arg(pid)
             .status()?
     } else {
-        Command::new("kill")
-            .arg("-INT")
-            .arg(pid)
-            .status()?
+        Command::new("kill").arg("-INT").arg(pid).status()?
     };
-    
+
     match status.code() {
-        Some(0) => {
-            Ok(())
-        }
+        Some(0) => Ok(()),
         Some(code) => {
             let msg = format!("Kill command failed with status {}", code);
             Err(io::Error::new(ErrorKind::Other, msg))
@@ -280,18 +286,16 @@ pub fn stop(state: &Arc<Mutex<Option<Child>>>, is_superuser: bool, is_async: boo
     }?;
 
     if is_async {
-        return Ok(())
+        return Ok(());
     }
-    
+
     match child.wait() {
         Ok(_) => {
             debug!("Stopped gracefully");
             *locked = None;
             Ok(())
         }
-        Err(e) => {
-            Err(e)
-        }
+        Err(e) => Err(e),
     }
 }
 
@@ -315,11 +319,11 @@ mod tests {
             .is_test(true)
             .try_init();
     }
-    
+
     #[test]
     fn execute_echo() {
         setup();
-        
+
         let status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
         let output: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
@@ -332,13 +336,13 @@ mod tests {
                 *locked = Some(str.clone());
             }
         });
-        
+
         let status_clone = Arc::clone(&status);
         launcher.set_status_handler(move |status| {
             let mut locked = status_clone.lock().unwrap();
             *locked = Some(status);
         });
-        
+
         launcher.start().unwrap();
 
         let status_clone = Arc::clone(&status);
@@ -360,7 +364,7 @@ mod tests {
     #[test]
     fn execute_env() {
         setup();
-        
+
         let status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
         let output: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
@@ -396,29 +400,38 @@ mod tests {
 
         let locked_output = output.lock().unwrap();
         assert!(locked_output.is_some());
-        assert!(locked_output.clone().unwrap().lines().any(|line| line.contains("VAR1=VAL1")));
+        assert!(locked_output
+            .clone()
+            .unwrap()
+            .lines()
+            .any(|line| line.contains("VAR1=VAL1")));
     }
 
     #[test]
     fn stop_process() {
         setup();
-        
+
         let temp_file = NamedTempFile::new().unwrap();
 
-        temp_file.as_file().write_all(br#"
+        temp_file
+            .as_file()
+            .write_all(
+                br#"
           while true; do
             sleep 1
           done
-        "#).unwrap();
-        
+        "#,
+            )
+            .unwrap();
+
         let path = temp_file.path().to_str().unwrap();
         let cmd = format!("sh {}", path);
         let mut launcher = Launcher::test_new(cmd, HashMap::new());
-        
+
         launcher.start().unwrap();
-        
+
         assert!(launcher.is_running());
-        
+
         launcher.stop().unwrap();
 
         assert!(!launcher.is_running());
@@ -427,14 +440,19 @@ mod tests {
     #[test]
     fn stop_process_async() {
         setup();
-        
+
         let temp_file = NamedTempFile::new().unwrap();
 
-        temp_file.as_file().write_all(br#"
+        temp_file
+            .as_file()
+            .write_all(
+                br#"
           while true; do
             sleep 1
           done
-        "#).unwrap();
+        "#,
+            )
+            .unwrap();
 
         let path = temp_file.path().to_str().unwrap();
         let cmd = format!("sh {}", path);
@@ -455,11 +473,16 @@ mod tests {
 
         let temp_file = NamedTempFile::new().unwrap();
 
-        temp_file.as_file().write_all(br#"
+        temp_file
+            .as_file()
+            .write_all(
+                br#"
           while true; do
             sleep 1
           done
-        "#).unwrap();
+        "#,
+            )
+            .unwrap();
 
         let path = temp_file.path().to_str().unwrap();
         let cmd = format!("sh {}", path);
@@ -470,7 +493,7 @@ mod tests {
 
         let result = launcher.start();
         assert!(result.is_err());
-        
+
         launcher.stop().unwrap();
     }
 
@@ -497,5 +520,4 @@ mod tests {
             panic!("Timed out waiting for condition");
         }
     }
-    
 }

@@ -11,12 +11,13 @@ pub struct LauncherAdapter {
 
 impl LauncherAdapter {
     pub fn new(launcher: &Rc<RefCell<Launcher>>) -> Self {
-        Self { delegate: Rc::clone(launcher) }
+        Self {
+            delegate: Rc::clone(launcher),
+        }
     }
 }
 
 impl Component for LauncherAdapter {
-
     fn start(&mut self, tx: &Sender<Message>) {
         let mut delegate = self.delegate.borrow_mut();
         let ctx = tx.clone();
@@ -31,22 +32,18 @@ impl Component for LauncherAdapter {
 
     fn on_message_received(&mut self, msg: &Message) {
         match msg {
-            Message::TrayMenu(action) => {
-                match action {
-                    MenuAction::RUN => {
-                        let mut launcher = self.delegate.borrow_mut();
-                        if !launcher.is_running() {
-                            launcher.start().unwrap();
-                        } else {
-                            launcher.stop_async();
-                        }
-                    },
-                    _ => {}
+            Message::TrayMenu(action) => match action {
+                MenuAction::RUN => {
+                    let mut launcher = self.delegate.borrow_mut();
+                    if !launcher.is_running() {
+                        launcher.start().unwrap();
+                    } else {
+                        launcher.stop_async();
+                    }
                 }
+                _ => {}
             },
             _ => {}
         }
-
     }
-
 }

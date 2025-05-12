@@ -21,9 +21,7 @@ pub enum Message {
 }
 
 pub trait Component {
-    
     fn start(&mut self, tx: &Sender<Message>);
-    
+
     fn on_message_received(&mut self, msg: &Message);
-    
 }
