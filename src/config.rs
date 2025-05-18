@@ -42,9 +42,6 @@ impl Program {
         &self.id
     }
 
-    pub fn get_args(&self) -> &HashMap<String, String> {
-        &self.args
-    }
     pub fn get_env(&self) -> &HashMap<String, String> {
         &self.env
     }
@@ -166,7 +163,6 @@ mod tests {
         assert!(program.need_superuser());
         assert!(program.get_input().is_some());
         assert_eq!(program.get_input().unwrap(), "arg2");
-        assert_eq!(program.get_args().get("arg1").unwrap(), "arg2");
         assert_eq!(program.get_env().get("ENVVAR").unwrap(), "env1");
 
         assert_eq!(program.get_title(), "title1");
@@ -177,7 +173,6 @@ mod tests {
 
     #[test]
     fn read_config_without_args_and_env() -> io::Result<()> {
-        // Create a temporary file
         let temp_file = NamedTempFile::new()?;
         let path = temp_file.path().to_str().unwrap();
         // Write some data to the file
@@ -192,7 +187,6 @@ mod tests {
         assert_eq!(program.get_id(), "id1");
         assert_eq!(program.get_command(), "command1");
         assert!(program.get_input().is_none());
-        assert!(program.get_args().is_empty());
         assert!(program.get_env().is_empty());
         assert_eq!(program.get_title(), "id1");
         assert_eq!(program.get_icon_on_path(), None);

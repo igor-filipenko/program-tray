@@ -84,7 +84,7 @@ impl Tray {
             MenuAction::RUN => self.toggle_running(),
             MenuAction::VISIBILITY => self.toggle_terminal_visibility(),
             MenuAction::QUIT => gtk::main_quit(),
-            MenuAction::UNKNOWN(menuId) => warn!("unknown menu action: {:?}", menuId),
+            MenuAction::UNKNOWN(menu_id) => warn!("unknown menu action: {:?}", menu_id),
         }
     }
 
