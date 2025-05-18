@@ -31,7 +31,7 @@ impl Launcher {
     pub fn new(program: &Program) -> Self {
         Launcher {
             command: program.get_command().clone(),
-            superuser: true,
+            superuser: program.need_superuser(),
             input: program.get_input().clone(),
             env: program.get_env().clone(),
             child: Arc::new(Mutex::new(None)),

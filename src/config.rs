@@ -12,6 +12,8 @@ use toml;
 pub struct Program {
     id: String,
     command: String,
+    #[serde(default)]
+    superuser: bool,
     input: Option<String>,
     #[serde(default)]
     args: HashMap<String, String>,
@@ -49,6 +51,10 @@ impl Program {
 
     pub fn get_command(&self) -> String {
         replace_args(&self.command, &self.args)
+    }
+
+    pub fn need_superuser(&self) -> bool {
+        self.superuser
     }
 
     pub fn get_input(&self) -> Option<String> {
@@ -136,6 +142,7 @@ mod tests {
             br#"
           id = "id1"
           command = "command1 $arg1"
+          superuser = true
           input = "arg2"
           
           [args]
@@ -156,6 +163,7 @@ mod tests {
         let program = parse_properties_file(path)?;
         assert_eq!(program.get_id(), "id1");
         assert_eq!(program.get_command(), "command1 arg2");
+        assert!(program.need_superuser());
         assert!(program.get_input().is_some());
         assert_eq!(program.get_input().unwrap(), "arg2");
         assert_eq!(program.get_args().get("arg1").unwrap(), "arg2");

@@ -111,6 +111,7 @@ impl Tray {
 
     fn on_program_stopped(&mut self) {
         self.item_run.set_text("Start");
+        self.item_run.set_enabled(true);
         self.set_icon(&self.icons.off);
         self.is_running = false;
     }
@@ -120,7 +121,7 @@ impl Tray {
     }
 
     fn toggle_terminal_visibility(&mut self) {
-        self.switch_terminal_visibility(!self.is_running)
+        self.switch_terminal_visibility(!self.is_shown)
     }
 
     fn switch_terminal_visibility(&mut self, visible: bool) {

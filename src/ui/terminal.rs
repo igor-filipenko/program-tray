@@ -5,11 +5,14 @@ use gtk::prelude::*;
 use gtk::{Button, ButtonsType, DialogFlags, MessageType, TextBuffer, TextView, Window};
 use std::process::ExitStatus;
 
+const MARK_END: &str = "end";
+
 #[derive(Clone)]
 pub struct Terminal {
     window: Window,
     button: Button,
     buffer: TextBuffer,
+    text_view: TextView,
     is_program_running: bool,
 }
 
@@ -52,7 +55,12 @@ impl Terminal {
 
         // Create a Close Button
         let button = Button::with_label("Close");
-
+        button.set_margin_start(10);
+        button.set_margin_end(10);
+        button.set_margin_top(5);
+        button.set_margin_bottom(5);
+        button.set_halign(gtk::Align::End);
+        
         // Add widgets to the vertical box
         vbox.pack_start(&scrolled_window, true, true, 0); // Expand Terminal
         vbox.pack_start(&button, false, false, 0); // Place button at the bottom
@@ -61,11 +69,14 @@ impl Terminal {
         window.add(&vbox);
 
         let buffer = text_view.buffer().expect("Failed to get buffer");
+        let end_iter = buffer.end_iter();
+        buffer.create_mark(Some(MARK_END), &end_iter, false);
 
         Self {
             window,
             button,
             buffer,
+            text_view,
             is_program_running: false,
         }
     }
@@ -98,6 +109,9 @@ impl Terminal {
     pub fn add_string(&self, str: &String) {
         let mut end = self.buffer.end_iter();
         self.buffer.insert(&mut end, &str);
+        self.buffer.move_mark_by_name(MARK_END, &end);
+        let mark = &self.buffer.mark(MARK_END).expect("No mark {MARK_END} found");
+        self.text_view.scroll_to_mark(mark, 0.0, false, 0.0, 0.0);
     }
 
     pub fn clear(&self) {
